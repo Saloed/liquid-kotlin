@@ -12,3 +12,5 @@ public inline fun <T, R> Iterable<T>.zipMap(transform: (T) -> R) =
 public inline fun <T, X> Iterable<Pair<T?, X?>>.pairNotNull() =
         this.filter { it.first != null && it.second != null }
                 .map { it.first!! to it.second!! }
+
+fun reportError(message: String) = System.err.println(message)
