@@ -29,6 +29,7 @@ interface MyTransformer<T : MyTransformer<T>> : Transformer<T> {
         is FunctionReferenceTerm -> transformFunctionReference(term)
         is ReferenceTerm -> transformReferenceTerm(term)
         is TypeValueTerm -> transformTypeValueTerm(term)
+        is IfTerm -> transformIfTerm(term)
         else -> super.transform(term)
     }
 
@@ -37,6 +38,7 @@ interface MyTransformer<T : MyTransformer<T>> : Transformer<T> {
     fun transformFunctionReference(term: FunctionReferenceTerm): Term = term.accept(this)
     fun transformParameterTerm(term: ParameterTerm): Term = term.accept(this)
     fun transformReferenceTerm(term: ReferenceTerm): Term = term.accept(this)
+    fun transformIfTerm(term: IfTerm): Term = term.accept(this)
 
     fun transformEmptyTerm(term: EmptyTerm): Term {
         println("EmptyTerm: $term")

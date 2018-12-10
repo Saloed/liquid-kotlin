@@ -141,9 +141,10 @@ object LiquidTypeAnalyzer {
         is KtConstantExpression -> analyzeConstantExpressionValue(expression)
         is KtBinaryExpression -> analyzeBinaryExpressionValue(expression)
         is KtNameReferenceExpression -> analyzeNameReferenceExpressionValue(expression)
-        //        is KtIfExpression -> analyzeIfExpressionValue(expression)
+        is KtIfExpression -> analyzeIfExpressionValue(expression)
         is KtCallExpression -> analyzeCallExpressionValue(expression)
         is KtDotQualifiedExpression -> analyzeDotQualifiedExpressionValue(expression)
+        is KtArrayAccessExpression -> analyzeArrayAccessExpressionValue(expression)
         else -> throw IllegalArgumentException("Unsupported value expression $expression")
     }
 
@@ -167,6 +168,11 @@ object LiquidTypeAnalyzer {
         return TermFactory.getTrue()
     }
 
+    private fun analyzeArrayAccessExpressionValue(expression: KtArrayAccessExpression): Term {
+        val type = expression.getType(bindingContext)
+                ?: throw IllegalArgumentException("No type for array access expression $expression")
+        return TermFactory.elementValue(expression, type.toKexType())
+    }
 
     private fun analyzeIfExpression(expression: KtIfExpression): Term {
         val cond = expression.condition ?: throw IllegalArgumentException("If without condition")
@@ -185,6 +191,20 @@ object LiquidTypeAnalyzer {
         if (falseBranch != null) return falseBranch
 
         return TermFactory.emptyTerm("EmptyIfExpr")
+    }
+
+
+    private fun analyzeIfExpressionValue(expression: KtIfExpression): Term {
+        val cond = expression.condition ?: throw IllegalArgumentException("If without condition")
+
+        val thenBranch = expression.getThen()?.let { analyzeExpressionValue(it) }
+        val elseBranch = expression.getElse()?.let { analyzeExpressionValue(it) }
+        val condTerm = analyzeExpressionValue(cond)
+
+        if (thenBranch == null && elseBranch == null) throw IllegalArgumentException("If branches are null")
+        if (thenBranch == null || elseBranch == null) throw NotImplementedError("Both branches of if must exists for now")
+
+        return TermFactory.getIf(condTerm, thenBranch, elseBranch)
     }
 
     private fun analyzeNameReferenceExpression(expression: KtNameReferenceExpression): Term {
@@ -314,7 +334,15 @@ object LiquidTypeAnalyzer {
         val type = resolvedCall.candidateDescriptor.returnType
                 ?: throw IllegalArgumentException("Function return type is unknown")
 
-        return TermFactory.elementValue(funElement, type.toKexType())
+        val funValue = TermFactory.elementValue(funElement, type.toKexType())
+
+        if (funElement.hasBody() && !funElement.hasBlockBody()) {
+            val funExpression = funElement.bodyExpression
+                    ?: throw IllegalArgumentException("Function without body: ${funElement.text}")
+            val expressionValue = analyzeExpressionValue(funExpression)
+            LiquidTypeInfoStorage[funElement] = TermFactory.equalityTerm(funValue, expressionValue)
+        }
+        return funValue
     }
 
     fun removeRecursion(element: PsiElement, terms: List<Term>, typeConstraints: LiquidTypeInfo): Pair<PsiElement, List<Term>> {
@@ -358,7 +386,7 @@ object LiquidTypeAnalyzer {
 //        println("$inlinedTypeConstraints")
 
         println("##################################################")
-        val typeReferenceInliner = DummyTypeReferenceValue(false)
+        val typeReferenceInliner = DummyTypeReferenceValue(true)
 //        val tmp = inlinedTypeConstraints.accept(typeReferenceInliner).accept(binarySimplifier)
 //        println("$tmp")
 //        println("##################################################")
@@ -367,314 +395,64 @@ object LiquidTypeAnalyzer {
         val config = GlobalConfig
         config.initialize(RuntimeConfig, FileConfig("kex/kex.ini"))
 
-        for ((key, constraints) in LiquidTypeInfoStorage.liquidTypeConstraints.unsafeTypeConstraints()) {
-            val combinedConstraints = constraints
-//                    .also {
-//                        println("$".repeat(20))
-//                        println(it)
-//                    }
-                    .combineWithAnd().deepAccept(binarySimplifier)
-//                    .also {
-//                        println("$".repeat(20))
-//                        println(it)
-//                    }
-                    .deepAccept(typeReferenceInliner)
-//                    .also {
-//                        println("$".repeat(20))
-//                        println(it)
-//                    }
-                    .deepAccept(binarySimplifier)
-//                    .also {
-//                        println("$".repeat(20))
-//                        println(it)
-//                    }
-            if (combinedConstraints == TermFactory.getTrue()) continue
-            val predicate = TermFactory.getNegTerm(combinedConstraints).toPredicateState()
+        val initialConstraints = LiquidTypeInfoStorage.liquidTypeConstraints
+                .unsafeTypeConstraints()
+                .map { it.toPair() }
+                .mapFirst { listOf(it) }
+                .mapSecond { constraints ->
+                    constraints
+                            .combineWithAnd()
+                            .deepAccept(binarySimplifier)
+                            .deepAccept(typeReferenceInliner)
+                            .deepAccept(binarySimplifier)
+                }
+
+
+        var nextConstraints = initialConstraints
+//        var iteration = 0
+//        while (nextConstraints.isNotEmpty()) {
+//            println("$iteration ".repeat(20))
+        val unsatisfiable = ArrayList<Pair<List<PsiElement>, Term>>()
+        for ((key, constraints) in nextConstraints) {
+            if (constraints == TermFactory.getTrue()) continue
+
+            val predicate = TermFactory.getNegTerm(constraints).toPredicateState()
             println(predicate)
             try {
                 val result = SMTProxySolver().isPathPossible(predicate, TermFactory.getTrue().toPredicateState())
-//                    if (key is KtNamedFunction) {
-                println("$result ${key.text}")
-                println("${(result as? Result.SatResult)?.model}")
-//                    }
+                println("$result ${key.map { it.text }}")
+                if (result is Result.SatResult) {
+                    println("${result.model}")
+                } else {
+                    unsatisfiable.add(key to constraints)
+                }
             } catch (ex: Exception) {
-                System.err.println(ex)
-                System.err.println(key.text)
-                System.err.println("$combinedConstraints")
+                System.err.println("$ex")
+                System.err.println("${ex.stackTrace.map { "$it \n" }}")
+                System.err.println("${key.map { it.text }}")
+                System.err.println("$constraints")
             }
             println("-".repeat(100))
         }
-
-
-        val b = 4
-
-//        val functions = file.collectDescendantsOfType<KtNamedFunction> { true }
-//        for (func in functions) {
-//            analyzeFunction(func)
-//        }
+//            nextConstraints = if (unsatisfiable.size <= 1) {
+//                emptyList()
 //
-//        println("$LiquidTypeInfoStorage")
-//
-//        println("#####################################")
-//
-//        val nameReferenceTransformer = TransformReferences(bindingContext, true)
-//        val typeTermInliner = DummyTypeReferenceValue(true)
-//        val liquidTypeInfo = LiquidTypeInfoStorage.unsafeTypeInfo().removeRecursiveTypeConstraints()
-//        println("$liquidTypeInfo")
-//
-//
-//
-
-
-//        val typeInliner = TypeReferenceInliner()
-//        var localLiquidTypeInfo = liquidTypeInfo
-//        for (i in 0..3) {
-//            println("$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$i$")
-//            val transformedTypeInfo = localLiquidTypeInfo
-//                    .accept(nameReferenceTransformer)
-//                    .accept(typeTermInliner)
-//                    .unsafeTypeInfo()
-
-
-//        for ((key, terms) in tmp.unsafeTypeConstraints()) {
-//
-//            val constraints = LiquidTypeInfoStorage.getConstraints(key) ?: continue
-//            val combinedConstraints = constraints
-//                    .combineWithAnd()
-//                    .deepAccept(typeInliner)
-//                    .deepAccept(typeReferenceInliner)
-//                    .deepAccept(binarySimplifier)
-//            if (combinedConstraints == TermFactory.getTrue()) continue
-//            println(combinedConstraints)
-//            val inverseCondition = PredicateFactory.getInequality(combinedConstraints, TermFactory.getTrue())
-//            println(LiquidTypeInfoStorage.liquidTypeValues[key])
-//            val sample = terms.toPredicateState().addPredicate(inverseCondition)
-//            try {
-//                val result = SMTProxySolver().isViolated(sample, BasicState())
-////                    if (key is KtNamedFunction) {
-//                println(key.context?.context?.context?.text)
-//                println("$result $sample")
-////                    }
-//            } catch (ex: Exception) {
-//                System.err.println(ex)
-//                System.err.println(key.text)
-//                System.err.println(sample)
+//            } else {
+//                val keys = unsatisfiable.map { it.first }
+//                val terms = unsatisfiable.map { it.second }
+//                mergeConstraints(keys, terms)
 //            }
-//        }
-//            localLiquidTypeInfo = localLiquidTypeInfo.accept(typeInliner).removeRecursiveTypeConstraints()
-//
+//            iteration++
 //        }
 
-//        val sample = LiquidTypeInfoStorage.unsafeTypeInfo().toList()[0].second.current
-//        val result = SMTProxySolver().isViolated(sample, BasicState())
-//        println("${(result as Result.SatResult).model}")
-
-        val a = 3
-//        val visitedElements = HashSet<PsiElement>()
-//
-//        do {
-//            val elementsToAnalyze = LiquidTypeInfoStorage.unsafeTypeInfo().keys
-//                    .filter { it !in visitedElements }
-//                    .also { visitedElements.addAll(it) }
-//            elementsToAnalyze.filter { it is KtParameter || it is KtFunction }
-//                    .zipMap { findUsages(it) }
-//                    .map { (element, usages) -> usages.map { analyzeUsage(element, it) } }
-//
-//        } while (elementsToAnalyze.isNotEmpty())
 
     }
 
 
-//    private fun analyzeFunction(function: KtNamedFunction) = LiquidTypeInfoStorage.unsafeTypeInfo()
-//            .computeIfAbsent(function) {
-//
-//                if (function.hasBody() && !function.hasBlockBody()) {
-//                    val funExpr = function.bodyExpression
-//                            ?: throw IllegalArgumentException("Unknown body for expression function")
-//                    val arguments = function.collectFirstDescendantsOfType<KtParameter> { true }
-//                    val funType = analyzeExpressionForReferences(funExpr, arguments)
-//                    return@computeIfAbsent funType
-//                }
-//
-//                // todo: analyze function body
-//
-//                val ifExpressions = function.collectFirstDescendantsOfType<KtIfExpression> { true }
-//                for (expr in ifExpressions) {
-//                    analyzeExpressionForReferences(expr)
-//                }
-//
-//                TermFactory.emptyTerm("Function(${function.fqName})")
-//            }
-//
-//
-//
-//    private fun analyzeExpressionForReferences(expression: KtExpression, references: List<PsiElement>,
-//                                               type: AnalysisType = AnalysisType.TYPE): Term {
-//        val analysisResult = analyzeCallExpression(expression)
-//        for (ref in references) {
-//            LiquidTypeInfoStorage[ref] = analysisResult
-//        }
-//        return analysisResult
-//    }
-//
-//    private fun analyzeExpressionForReferences(expression: KtExpression, type: AnalysisType = AnalysisType.TYPE): Term {
-//        val references = expression.collectDescendantsOfType<KtNameReferenceExpression> { true }
-//        return analyzeExpressionForReferences(expression, references, type)
-//    }
-
-
-//    fun analyzeUsage(element: PsiElement, usage: PsiElement) = when (usage) {
-//        is KtNameReferenceExpression -> analyzeUsage(element, usage)
-//        else -> Unit
-//    }
-//
-//    fun expressionAssignee(expr: KtExpression): PsiElement? {
-//        val parent = expr.parent ?: return null
-//        val isAssignee = parent.allChildren.toList()
-//                .filterIsInstance<LeafPsiElement>()
-//                .map { it.elementType }
-//                .contains(KtTokens.EQ)
-//        return if (isAssignee) parent else null
-//    }
-//
-//
-//    fun analyzeUsage(element: PsiElement, usage: KtNameReferenceExpression) {
-//        val parent = usage.parent
-//        if (parent is KtCallExpression) {
-//            return analyzeCallExpression(element as KtFunction, parent)
-//        }
-//
-//        val ifParent = usage.parentOfType<KtIfExpression>()
-//        if (ifParent != null) {
-//            return analyzeIfExpression(ifParent)
-//        }
-//    }
-
-
-    //    fun analyzeCallExpression(funElement: KtFunction, expr: KtCallExpression) {
-//        val assignee = expressionAssignee(expr)
-//        if (assignee != null) {
-//            LiquidTypeInfoStorage.putIfNotExists(funElement, Term.TRUE)
-//            LiquidTypeInfoStorage[assignee] = Term.Variable(funElement)
-//        }
-//
-//        val arguments = expr.getCall(bindingContext)?.valueArguments ?: return
-//        if (arguments.any { it.isNamed() }) return
-//        val funArguments = arguments.map { it.getArgumentExpression() }
-//
-//        val funParameters = bindingContext[BindingContext.FUNCTION, funElement]?.valueParameters ?: return
-//        val funParameterElements = funParameters.map { it.findPsi()!! }
-//        funParameterElements.forEach { LiquidTypeInfoStorage.putIfNotExists(it, Term.TRUE) }
-//
-//        for ((arg, funParameterElement) in funArguments.zip(funParameterElements)) {
-//            if (arg is KtCallExpression) {
-//                val callFunElement = bindingContext[BindingContext.RESOLVED_CALL, arg.getCall(bindingContext)]
-//                        ?.candidateDescriptor
-//                        ?.findPsi()
-//                        ?: continue
-//                LiquidTypeInfoStorage[callFunElement] = Term.Variable(funParameterElement)
-//            } else if (arg is KtNameReferenceExpression) {
-//                val reference = bindingContext[BindingContext.REFERENCE_TARGET, arg]
-//                        ?.findPsi()
-//                        ?: continue
-//                LiquidTypeInfoStorage[reference] = Term.Variable(funParameterElement)
-//            }
-//        }
-//    }
-//
-//    fun analyzeIfExpression(expr: KtIfExpression) {
-//        val condition = expr.condition ?: return
-//        val analyzedCond = analyzeCallExpression(condition) ?: return
-//        val thenExpr = expr.then?.let { analyzeIfBranch(analyzedCond, it) }
-//        val elseExpr = expr.getElse()?.let { analyzeIfBranch(Term.Not(analyzedCond), it) }
-//
-//        if (thenExpr == null && elseExpr == null) return
-//
-//        val assignee = expressionAssignee(expr) ?: return
-//        LiquidTypeInfoStorage[assignee] = Term.Or(thenExpr ?: Term.TRUE, elseExpr ?: Term.TRUE)
-//    }
-//
-//    fun analyzeIfBranch(condition: Term, branch: KtExpression): Term? {
-//        val result = analyzeCallExpression(branch) ?: return null
-//        return Term.And(condition, result)
-//    }
-//
-//    fun analyzeCallExpression(expr: KtExpression): Term? {
-//        when (expr) {
-//            is KtNameReferenceExpression -> {
-//                val reference = bindingContext[BindingContext.REFERENCE_TARGET, expr]?.findPsi()
-//                        ?: throw IllegalArgumentException("Unknown reference")
-//                LiquidTypeInfoStorage.putIfNotExists(reference, Term.TRUE)
-//                return Term.Variable(reference)
-//            }
-//            is KtBinaryExpression -> {
-//                val left = analyzeCallExpression(expr.left!!)
-//                val right = analyzeCallExpression(expr.right!!)
-//                if (left == null || right == null) return null
-//                val opToken = expr.operationToken as? KtSingleValueToken ?: return null
-//                return Term.BinaryExpression(opToken.value, Term.BinaryTerm(left, right))
-//            }
-//            else -> return null
-//        }
-//    }
-//
-//
-
-//    private fun analyzeReferenceTarget(element: PsiElement): Term {
-//        if (element !in LiquidTypeInfoStorage) LiquidTypeInfoStorage[element] = when (element) {
-//            is KtParameter -> findUsages(element)
-//            is KtProperty -> findUsages(element)
-//            else -> throw IllegalArgumentException("Unknown usage reference type: $element")
-//        }.filterIsInstance<KtExpression>()
-//                .map { analyzeCallExpression(it) }
-//                .combineWithAnd()
-//        return TermFactory.elementType(element)
-//    }
-//
-//
-//    private fun findLocalUsages(element: PsiElement): List<KtNameReferenceExpression> {
-//        val searchContext = element.parents.first { it is KtFunction || it is KtFile }
-//        return searchContext.collectDescendantsOfType {
-//            bindingContext[BindingContext.REFERENCE_TARGET, it]?.findPsi() == element
-//        }
-//    }
+    fun mergeConstraints(keys: List<List<PsiElement>>, constraints: List<Term>): List<Pair<List<PsiElement>, Term>> {
+        return listOf(keys.flatten() to constraints.combineWithAnd())
+    }
 }
-
-
-//    private fun findUsages(element: KtParameter) = runBlocking {
-//        findUsages(element, findPropertyUsagesOptions)
-//    }
-//
-//    private fun findUsages(element: KtProperty) = runBlocking {
-//        findUsages(element, findPropertyUsagesOptions)
-//    }
-//
-//
-//    private suspend fun findUsages(element: PsiElement, options: FindUsagesOptions) = suspendCoroutine<List<PsiElement>> { cont ->
-//        val findHandler = findUsagesManager.getFindUsagesHandler(element, false)
-//                ?: throw IllegalArgumentException("Cant find usages of $element")
-//        val result = ArrayList<PsiElement>()
-//        FindUsagesManager.startProcessUsages(
-//                findHandler,
-//                findHandler.primaryElements,
-//                findHandler.secondaryElements,
-//                { it ->
-//                    if (it is UsageInfo2UsageAdapter) {
-//                        result.add(it.element)
-//                    }
-//                    println("$it")
-//                    true
-//                },
-//                options,
-//                {
-//                    cont.resume(result)
-//                    println("OnComplete")
-//                }
-//        ).start()
-//    }
-//
-//}
-
 
 inline fun <reified T : PsiElement> PsiElement.findChildWithType(predicate: (T) -> Boolean = { true }) =
         this.children.filterIsInstance(T::class.java)

@@ -19,10 +19,7 @@ import org.jetbrains.research.kex.ktype.*
 import org.jetbrains.research.kex.state.predicate.Predicate
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.predicate.PredicateType
-import org.jetbrains.research.kex.state.term.BinaryTerm
-import org.jetbrains.research.kex.state.term.CmpTerm
-import org.jetbrains.research.kex.state.term.Term
-import org.jetbrains.research.kex.state.term.TermFactory
+import org.jetbrains.research.kex.state.term.*
 import org.jetbrains.research.kex.state.transformer.Transformer
 import org.jetbrains.research.kfg.ir.Location
 import org.jetbrains.research.kfg.ir.value.instruction.BinaryOpcode
@@ -156,6 +153,13 @@ fun TermFactory.elementType(element: PsiElement) = when (element) {
     is KtNameReferenceExpression -> throw IllegalArgumentException("WTF????")
     else -> TypeTerm(element)
 }
+
+fun TermFactory.getIf(cond: Term, thenExpr: Term, elseExpr: Term): Term {
+    if (cond.type !is KexBool) throw IllegalArgumentException("If condition must be KexBool but $cond")
+    if (thenExpr.type != elseExpr.type) throw IllegalArgumentException("If branches must type equal but ($thenExpr) and ($elseExpr)")
+    return IfTerm(thenExpr.type, cond, thenExpr, elseExpr)
+}
+
 
 fun TermFactory.elementValue(element: PsiElement, context: BindingContext) = when (element) {
     is KtNameReferenceExpression -> {
