@@ -1,5 +1,3 @@
-import org.jetbrains.kotlin.utils.addToStdlib.swap
-
 public inline fun <X, T, R> Iterable<Pair<X, T>>.mapSecond(transform: (T) -> R) =
         this.map { it.first to transform(it.second) }
 
@@ -14,3 +12,5 @@ public inline fun <T, X> Iterable<Pair<T?, X?>>.pairNotNull() =
                 .map { it.first!! to it.second!! }
 
 fun reportError(message: String) = System.err.println(message)
+
+inline fun <reified T> Any?.safeAs(): T? = this as? T

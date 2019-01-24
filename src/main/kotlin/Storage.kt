@@ -1,84 +1,67 @@
+import com.google.common.base.Objects
 import com.google.common.collect.ImmutableMap
 import com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.BindingTrace
+import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.util.slicedMap.ReadOnlySlice
 import org.jetbrains.kotlin.util.slicedMap.SlicedMapImpl
 import org.jetbrains.kotlin.util.slicedMap.WritableSlice
-import org.jetbrains.research.kex.ktype.KexBool
-import org.jetbrains.research.kex.state.BasicState
-import org.jetbrains.research.kex.state.PredicateState
-import org.jetbrains.research.kex.state.StateBuilder
+import org.jetbrains.research.kex.state.predicate.Predicate
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.term.Term
 import org.jetbrains.research.kex.state.term.TermFactory
-import org.jetbrains.research.kex.state.transformer.Transformer
-import org.jetbrains.research.kfg.ir.value.instruction.BinaryOpcode
+import java.util.concurrent.atomic.AtomicInteger
 
-typealias TypeConstraintMap<K, V> = HashMap<K, V>
 
-data class LiquidTypeInfo(private val typeConstraints: TypeConstraintMap<PsiElement, MutableList<Term>>) {
+object UIDGenerator {
+    private val generator = AtomicInteger(0)
+    val id: Int
+        get() = generator.incrementAndGet()
+}
 
-    operator fun get(element: PsiElement) = typeConstraints[element]
-    operator fun set(element: PsiElement, typeInfo: Term) {
-        typeConstraints.getOrPut(element) { arrayListOf() } += typeInfo
-    }
+data class LiquidType(
+        val expression: KtExpression,
+        val type: KotlinType,
+        val variable: Term,
+        var predicate: Predicate?,
+        val dependsOn: MutableList<LiquidType>
+) {
+    val hasConstraints: Boolean
+        get() = predicate != null
 
-    fun <T : Transformer<T>> accept(t: Transformer<T>) = typeConstraints.toList()
-            .mapSecond { it.map { t.transform(it).accept(t) } }
-            .toLiquidTypeInfo()
 
-    operator fun contains(element: PsiElement) = element in typeConstraints
-
-    fun unsafeTypeConstraints() = typeConstraints
-
-    override fun toString() = typeConstraints.map { "${it.key.text} -> ${it.value.map { it.deepToString() }}" }.joinToString("\n")
+    fun finalConstraint() = predicate ?: PredicateFactory.getBool(TermFactory.getTrue())
 
     companion object {
-        fun empty() = LiquidTypeInfo(TypeConstraintMap())
+        fun create(expression: KtExpression, type: KotlinType) = LiquidType(
+                expression,
+                type,
+                TermFactory.getValue(type.toKexType(), "${UIDGenerator.id}").apply {
+                    additionalInfo = ": ${expression.text}"
+                },
+                null,
+                arrayListOf()
+        )
     }
 
-    fun Iterable<Pair<PsiElement, List<Term>>>.toLiquidTypeInfo(): LiquidTypeInfo {
-        val result = TypeConstraintMap<PsiElement, MutableList<Term>>()
-        for ((key, value) in this) {
-            result[key] = value.toMutableList()
-        }
-        return LiquidTypeInfo(result)
-    }
+    override fun hashCode() = Objects.hashCode(expression, type, variable)
+
+    override fun equals(other: Any?) = this === other
+            || other is LiquidType
+            && expression == other.expression && type == other.type && variable == other.variable
+
+    override fun toString() = "${variable.name} $type ${expression.text} | $predicate"
+}
+
+object NewLQTInfo {
+    val typeInfo = HashMap<PsiElement, LiquidType>()
+    fun getOrException(element: PsiElement) = typeInfo[element]
+            ?: throw IllegalStateException("Type for $element expected")
 
 }
 
-object LiquidTypeInfoStorage {
-    private val liquidTypeInfo = LiquidTypeInfo.empty()
-    val liquidTypeConstraints = LiquidTypeInfo.empty()
-    val liquidTypeValues = TypeConstraintMap<Term, Term>()
-
-    operator fun get(element: PsiElement) = liquidTypeInfo[element]
-    operator fun set(element: PsiElement, typeInfo: Term) = liquidTypeInfo.set(element, typeInfo)
-    operator fun contains(element: PsiElement) = liquidTypeInfo.contains(element)
-    fun <T : Transformer<T>> accept(t: Transformer<T>) = liquidTypeInfo.accept(t)
-    fun unsafeTypeInfo() = liquidTypeInfo
-
-    fun getConstraints(element: PsiElement) = liquidTypeConstraints[element]
-    fun addConstraint(element: PsiElement, typeInfo: Term) = liquidTypeConstraints.set(element, typeInfo)
-}
-
-fun Term.toPredicateState(): PredicateState = BasicState(listOf(PredicateFactory.getBool(this)))
-fun List<Term>.toPredicateState(): PredicateState = BasicState(this.map { PredicateFactory.getBool(it) })
-fun List<Term>.combineWithAnd() = when (size) {
-    0 -> throw IllegalStateException("Empty constraint")
-    1 -> first()
-    2 -> TermFactory.getBinary(KexBool, BinaryOpcode.And(), this[0], this[1])
-    else -> fold(TermFactory.getTrue() as Term) { acc: Term, localTerm: Term ->
-        TermFactory.getBinary(KexBool, BinaryOpcode.And(), acc, localTerm)
-    }
-}
-
-
-fun getTruePredicateState(): PredicateState = BasicState(listOf(PredicateFactory.getBool(TermFactory.getTrue())))
-
-fun Map.Entry<PsiElement, StateBuilder>.text() = "$key ${key.text} -> ${value.current.toString().trim('\n')}"
 
 class MyBindingContext(private val bindingContext: BindingContext) : BindingContext {
     override fun <K : Any?, V : Any?> getKeys(slice: WritableSlice<K, V>?) =
