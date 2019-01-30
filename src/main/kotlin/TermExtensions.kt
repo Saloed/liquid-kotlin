@@ -3,9 +3,11 @@ import org.jetbrains.kotlin.KtNodeTypes
 import org.jetbrains.kotlin.js.descriptorUtils.getJetTypeFqName
 import org.jetbrains.kotlin.js.descriptorUtils.nameIfStandardType
 import org.jetbrains.kotlin.lexer.KtTokens
+import org.jetbrains.kotlin.psi.KtTypeReference
 import org.jetbrains.kotlin.types.DeferredType
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.SimpleType
+import org.jetbrains.kotlin.types.checker.isClassType
 import org.jetbrains.kotlin.types.typeUtil.isBoolean
 import org.jetbrains.kotlin.types.typeUtil.isChar
 import org.jetbrains.kotlin.types.typeUtil.isInt
@@ -99,20 +101,22 @@ fun getArrayType(type: KotlinType): KexArray {
     }
 }
 
-fun getSimpleType(type: SimpleType): KexType {
-    return when ("$type") {
-        "String" -> KexArray(KexChar)
-        else -> throw IllegalArgumentException("Unknown Simple type")
-    }
+fun getClassType(type: SimpleType) = KexClass(CM.getByName(type.getJetTypeFqName(false)))
+
+fun getSimpleType(type: SimpleType) = when {
+    type.isClassType -> getClassType(type)
+    else -> throw IllegalArgumentException("Unknown type $type")
 }
 
-fun KotlinType.toKexType() = when {
+fun KexType.makeReference() = KexReference(this)
+
+fun KotlinType.toKexType(): KexType = when {
     isBoolean() -> KexBool
     isInt() -> KexInt
     isChar() -> KexChar
-    isArrayType(this) -> getArrayType(this)
+//    isArrayType(this) -> getArrayType(this)
     this is SimpleType -> getSimpleType(this)
-    this is DeferredType -> KexClass(CM.getByName(this.getJetTypeFqName(false)))
+    this is DeferredType -> unwrap().toKexType()
     else -> throw IllegalArgumentException("Unknown type $this")
 }
 
@@ -148,6 +152,7 @@ fun <T : Term> Term.collectDescendantsOfType(predicate: (Term) -> Boolean): List
 
 
 fun TermFactory.implication(lhs: Term, rhs: Term) = getBinary(BinaryOpcode.Implies(), lhs, rhs)
+
 
 fun PredicateFactory.getBool(term: Term) = getEquality(term, TermFactory.getTrue(), PredicateType.Path())
 

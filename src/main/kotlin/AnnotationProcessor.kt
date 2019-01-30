@@ -1,4 +1,5 @@
 import com.intellij.openapi.command.WriteCommandAction
+import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.descriptors.SimpleFunctionDescriptor
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.js.resolve.diagnostics.findPsi
@@ -37,11 +38,10 @@ class LqtAnnotationProcessor(
 
         if (declaration !is KtParameter)
             throw NotImplementedError("Annotations support implemented only for function arguments")
-        if (outerSpace !is SimpleFunctionDescriptor)
+        if (outerSpace !is FunctionDescriptor)
             throw NotImplementedError("Annotations support implemented only for function arguments")
 
-        val funPsi = outerSpace.findPsi().safeAs<KtNamedFunction>()
-                ?: throw IllegalStateException("Function without PSI")
+        val funPsi = outerSpace.findPsi() ?: throw IllegalStateException("PSI for declaration context not found")
 
         val newExprFragment = psiElementFactory.createExpressionCodeFragment(constraint, funPsi)
         WriteCommandAction.runWriteCommandAction(newExprFragment.project) {

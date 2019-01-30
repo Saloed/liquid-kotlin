@@ -11,8 +11,8 @@ import com.intellij.psi.PsiManager
 import org.jetbrains.kotlin.idea.caches.resolve.KotlinCacheServiceImpl
 import org.jetbrains.kotlin.idea.findUsages.KotlinFunctionFindUsagesOptions
 import org.jetbrains.kotlin.idea.findUsages.KotlinPropertyFindUsagesOptions
+import org.jetbrains.kotlin.idea.refactoring.getLineNumber
 import org.jetbrains.kotlin.js.resolve.diagnostics.findPsi
-import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtFile
@@ -20,7 +20,6 @@ import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
 import org.jetbrains.kotlin.resolve.calls.callUtil.getCall
 import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCallWithAssert
-import org.jetbrains.liquidtype.LqT
 import org.jetbrains.research.kex.config.FileConfig
 import org.jetbrains.research.kex.config.GlobalConfig
 import org.jetbrains.research.kex.config.RuntimeConfig
@@ -37,6 +36,7 @@ object LiquidTypeAnalyzer {
     private lateinit var findUsagesManager: FindUsagesManager
 
     private lateinit var psiElementFactory: KtPsiFactory
+    private lateinit var psiDocumentManager: PsiDocumentManager
 
     private lateinit var findFunctionUsagesOptions: FindUsagesOptions
     private lateinit var findPropertyUsagesOptions: FindUsagesOptions
@@ -46,9 +46,9 @@ object LiquidTypeAnalyzer {
     @JvmStatic
     fun analyze(project: Project) {
         val projectRootManager = ProjectRootManager.getInstance(project)
-        val psiDocumentManager = PsiDocumentManager.getInstance(project)
         val psiManager = PsiManager.getInstance(project)
 
+        psiDocumentManager = PsiDocumentManager.getInstance(project)
         psiElementFactory = KtPsiFactory(project)
 
         findUsagesManager = (FindManager.getInstance(project) as FindManagerImpl).findUsagesManager
@@ -68,7 +68,10 @@ object LiquidTypeAnalyzer {
         val processor = LqtAnnotationProcessor(bindingContext, psiElementFactory, facade)
 
         for (file in allKtFilesPsi) {
-            if (!file.name.endsWith("Mian.kt")) continue
+
+            if (!file.name.endsWith("Test1.kt")) continue
+//            if (!file.name.endsWith("Mian.kt")) continue
+
             val lqtAnnotations = processor.processLqtAnnotations(file)
             analyzeSingleFile(file, lqtAnnotations)
         }
@@ -107,82 +110,32 @@ object LiquidTypeAnalyzer {
     }
 
 
-    private fun collectTypeDependencies(lqt: LiquidType): List<LiquidType> {
-        val result = arrayListOf<LiquidType>()
-        val toVisit = LinkedList<LiquidType>()
-        toVisit.add(lqt)
-        while (toVisit.isNotEmpty()) {
-            val current = toVisit.pop()
-            if (current in result) continue
-            result.add(current)
-            toVisit.addAll(current.dependsOn)
-        }
-        return result
-    }
-
-    private fun collectPredicates(lqt: LiquidType, includeSelf: Boolean): List<Predicate> =
-            collectTypeDependencies(lqt)
-                    .filter { includeSelf || it != lqt }
-                    .map { it.finalConstraint() }
-
     private fun checkFunctionCalls(file: KtFile) = file
             .collectDescendantsOfType<KtCallExpression> { it in NewLQTInfo.typeInfo }
             .zipMap { checkCallExpressionArguments(it) }
             .pairNotNull()
 
     private fun checkCallExpressionArguments(expression: KtCallExpression): Pair<PredicateState, PredicateState>? {
-        val callExprInfo = NewLQTInfo.getOrException(expression)
-        val funElement = callExprInfo.dependsOn.first().expression
+        val callExprInfo = NewLQTInfo.getOrException(expression).safeAs<CallExpressionLiquidType>() ?: return null
+        if (callExprInfo.parameters.all { !it.hasConstraints }) return null
 
-        val resolvedCall = expression.getCall(bindingContext)?.getResolvedCallWithAssert(bindingContext)
-                ?: throw IllegalArgumentException("Function not found")
+        val parametersConstraints = callExprInfo.parameters
+                .flatMap { it.collectPredicates(includeSelf = false) }
 
-
-        val arguments = resolvedCall.valueArguments.toList()
-                .mapFirst {
-                    it.findPsi() as? KtExpression ?: throw IllegalArgumentException("Function argument not found")
-                }
-                .mapSecond { it.arguments.mapNotNull { it.getArgumentExpression() } }
-                .mapSecond { if (it.size == 1) it else throw IllegalStateException("Error in arguments ${funElement.text} $it") }
-                .mapSecond { it.first() }
-                .mapFirst { it.LqTAnalyzer(bindingContext).analyze() }
-                .mapSecond { it.LqTAnalyzer(bindingContext).analyze() }
-
-        val parameters = arguments.map { it.first }
-
-        if (parameters.all { !it.hasConstraints }) return null
-
-        val parametersConstraints = parameters
-                .flatMap { collectPredicates(it, includeSelf = false) }
-                .map { it.asTerm() }
-                .combineWithAnd()
-
-        val substitutedArgumentsConstraints = arguments
-                .map { it.second }
-                .flatMap { collectPredicates(it, includeSelf = true) }
-                .map { it.asTerm() }
-                .combineWithAnd()
-
-
-        val substitutionTerms = arguments
-                .mapFirst { it.variable }
-                .mapSecond { it.variable }
-                .map { TermFactory.equalityTerm(it.second, it.first) }
-                .combineWithAnd()
+        val substitutedArgumentsConstraints = callExprInfo.arguments
+                .flatMap { it.collectPredicates(includeSelf = true) }
 
         val safePropertyLhs = listOf(
                 substitutedArgumentsConstraints,
-                substitutionTerms,
-                parametersConstraints
+                parametersConstraints,
+                callExprInfo.getPredicate()
         )
-                .map {
-                    PredicateFactory.getBool(it)
-                }
+                .flatten()
                 .collectToPredicateState()
                 .map(SimplifyPredicates::transform)
 //                .map(ConstantPropagator::transform)
 
-        val safePropertyRhs = parameters
+        val safePropertyRhs = callExprInfo.parameters
                 .map { it.finalConstraint() }
                 .map { it.asTerm() }
                 .map { TermFactory.getNegTerm(it) }
@@ -203,11 +156,18 @@ object LiquidTypeAnalyzer {
         val solver = initializeSolver()
         val safeProperties = checkFunctionCalls(file)
 
+//        viewLiquidTypes("XXX", NewLQTInfo.typeInfo.values)
+
         for ((expr, safeProperty) in safeProperties) {
-
             val (lhs, rhs) = safeProperty
+            println("[lines ${expr.getLineNumber(true) + 1}:${expr.getLineNumber(false) + 1}]  ${expr.context?.text}")
 
-            println("${expr.context?.text}")
+            println("lhs")
+            println(lhs)
+
+            println("rhs")
+            println(rhs)
+
 
 //            psToGraphView("TestL", lhs)
 //            psToGraphView("TestR", rhs)

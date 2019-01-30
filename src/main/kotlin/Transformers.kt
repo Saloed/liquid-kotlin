@@ -2,6 +2,7 @@ import org.jetbrains.research.kex.state.predicate.EqualityPredicate
 import org.jetbrains.research.kex.state.term.BinaryTerm
 import org.jetbrains.research.kex.state.term.CmpTerm
 import org.jetbrains.research.kex.state.term.Term
+import org.jetbrains.research.kex.state.term.ValueTerm
 import org.jetbrains.research.kex.state.transformer.Transformer
 import org.jetbrains.research.kfg.ir.value.instruction.BinaryOpcode
 import org.jetbrains.research.kfg.ir.value.instruction.CmpOpcode
@@ -54,4 +55,10 @@ object SimplifyPredicates : Transformer<SimplifyPredicates> {
         } ?: CmpTerm(term.type, term.opcode, lhs, rhs)
     }
 
+}
+
+class RenameVariables(val prefix: Int) : Transformer<RenameVariables> {
+    override fun transformValue(term: ValueTerm) = tf.getValue(term.type, "${prefix}_${term.name}").apply {
+        additionalInfo = term.additionalInfo
+    }
 }
