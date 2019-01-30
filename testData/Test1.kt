@@ -3,7 +3,7 @@ import org.jetbrains.liquidtype.LqT
 open class Vector(val elements: List<Int>)
 data class Point(val x: Int, @LqT("it > 0") val  y: Int) : Vector(listOf(x, y))
 
-fun square(a: Int) = if (a < 46340) a * a else 2147483647
+fun square(a: Int) = if (a >= 0 && a < 46340) a * a else 2147483647
 
 // && it.elements.size == 2
 

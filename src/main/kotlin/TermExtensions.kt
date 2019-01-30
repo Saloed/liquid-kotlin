@@ -154,7 +154,7 @@ fun <T : Term> Term.collectDescendantsOfType(predicate: (Term) -> Boolean): List
 fun TermFactory.implication(lhs: Term, rhs: Term) = getBinary(BinaryOpcode.Implies(), lhs, rhs)
 
 
-fun PredicateFactory.getBool(term: Term) = getEquality(term, TermFactory.getTrue(), PredicateType.Path())
+fun PredicateFactory.getBool(term: Term) = getEquality(term, TermFactory.getTrue())
 
 fun List<Predicate>.collectToPredicateState(): PredicateState = BasicState(this)
 

@@ -182,9 +182,8 @@ class CallAnalyzer(expression: KtExpression) : ExpressionAnalyzer<KtExpression>(
 
         val callConstraints = analyzeCallArguments(resolvedCall)
 
-        val callResult = TermFactory.equalityTerm(typeInfo.variable, callConstraints.callExpr.variable)
-        val callWithArguments = listOf(callResult, callConstraints.substitutionTerm).combineWithAnd()
-        val constraint = PredicateFactory.getBool(callWithArguments)
+        val callResult = PredicateFactory.getEquality(typeInfo.variable, callConstraints.callExpr.variable)
+        val callWithArguments = PredicateFactory.getBool(callConstraints.substitutionTerm)
 
         val callTypeInfo = CallExpressionLiquidType(
                 typeInfo.expression,
@@ -193,7 +192,9 @@ class CallAnalyzer(expression: KtExpression) : ExpressionAnalyzer<KtExpression>(
                 callConstraints.parameters,
                 callConstraints.arguments
         )
-        callTypeInfo.predicates.add(constraint)
+        callTypeInfo.predicates.add(callResult)
+        callTypeInfo.predicates.add(callWithArguments)
+        callTypeInfo.dependsOn.add(callConstraints.callExpr)
 
         NewLQTInfo.typeInfo[expression] = callTypeInfo
         return callTypeInfo
