@@ -12,21 +12,24 @@ import org.jetbrains.kotlin.idea.caches.resolve.KotlinCacheServiceImpl
 import org.jetbrains.kotlin.idea.findUsages.KotlinFunctionFindUsagesOptions
 import org.jetbrains.kotlin.idea.findUsages.KotlinPropertyFindUsagesOptions
 import org.jetbrains.kotlin.idea.refactoring.getLineNumber
-import org.jetbrains.kotlin.js.resolve.diagnostics.findPsi
+import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
+import org.jetbrains.kotlin.idea.search.allScope
+import org.jetbrains.kotlin.idea.util.getFileResolutionScope
+import org.jetbrains.kotlin.load.kotlin.VirtualFileFinder
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
-import org.jetbrains.kotlin.resolve.calls.callUtil.getCall
-import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCallWithAssert
+import org.jetbrains.kotlin.resolve.BindingContext
+import org.jetbrains.kotlin.utils.addToStdlib.cast
+import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import org.jetbrains.research.kex.config.FileConfig
 import org.jetbrains.research.kex.config.GlobalConfig
 import org.jetbrains.research.kex.config.RuntimeConfig
 import org.jetbrains.research.kex.smt.Result
 import org.jetbrains.research.kex.smt.SMTProxySolver
 import org.jetbrains.research.kex.state.PredicateState
-import org.jetbrains.research.kex.state.predicate.Predicate
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.term.TermFactory
 import java.util.*
@@ -34,14 +37,16 @@ import java.util.*
 object LiquidTypeAnalyzer {
 
     private lateinit var findUsagesManager: FindUsagesManager
+    private lateinit var ideFileFinder: VirtualFileFinder
 
     private lateinit var psiElementFactory: KtPsiFactory
     private lateinit var psiDocumentManager: PsiDocumentManager
+    private lateinit var resolutionFacade: ResolutionFacade
 
     private lateinit var findFunctionUsagesOptions: FindUsagesOptions
     private lateinit var findPropertyUsagesOptions: FindUsagesOptions
 
-    lateinit var bindingContext: MyBindingContext
+    lateinit var bindingContext: BindingContext
 
     @JvmStatic
     fun analyze(project: Project) {
@@ -50,6 +55,8 @@ object LiquidTypeAnalyzer {
 
         psiDocumentManager = PsiDocumentManager.getInstance(project)
         psiElementFactory = KtPsiFactory(project)
+        ideFileFinder = VirtualFileFinder.getInstance(project)
+
 
         findUsagesManager = (FindManager.getInstance(project) as FindManagerImpl).findUsagesManager
         findPropertyUsagesOptions = KotlinPropertyFindUsagesOptions(project)
@@ -63,16 +70,24 @@ object LiquidTypeAnalyzer {
                 .filterIsInstance(KtFile::class.java)
                 .toList()
 
-        val facade = KotlinCacheServiceImpl(project).getResolutionFacade(allKtFilesPsi)
-        bindingContext = MyBindingContext(facade.analyzeWithAllCompilerChecks(allKtFilesPsi).bindingContext)
-        val processor = LqtAnnotationProcessor(bindingContext, psiElementFactory, facade)
+
+        resolutionFacade = KotlinCacheServiceImpl(project).getResolutionFacade(allKtFilesPsi)
+
+        bindingContext = MyBindingContext(resolutionFacade.analyzeWithAllCompilerChecks(allKtFilesPsi).bindingContext)
+        val processor = LqtAnnotationProcessor(bindingContext, psiElementFactory, resolutionFacade)
 
         for (file in allKtFilesPsi) {
 
+//            if (!file.name.endsWith("xxx.kt")) continue
             if (!file.name.endsWith("Test1.kt")) continue
 //            if (!file.name.endsWith("Mian.kt")) continue
 
             val lqtAnnotations = processor.processLqtAnnotations(file)
+
+            bindingContext = lqtAnnotations.map { it.bindingContext }.fold(bindingContext) {
+                acc, bindingContext -> acc.mergeWith(bindingContext)
+            }
+
             analyzeSingleFile(file, lqtAnnotations)
         }
     }
@@ -89,8 +104,8 @@ object LiquidTypeAnalyzer {
                     }
 
     private fun addLqTAnnotationsInfo(lqtAnnotations: List<AnnotationInfo>) = lqtAnnotations.forEach {
-        InitialLiquidTypeInfoCollector(it.bindingContext).collect(it.expression, NewLQTInfo.typeInfo)
-        val constraint = it.expression.LqTAnalyzer(it.bindingContext).analyze()
+        InitialLiquidTypeInfoCollector(bindingContext, psiElementFactory, ideFileFinder).collect(it.expression, NewLQTInfo.typeInfo)
+        val constraint = it.expression.LqTAnalyzer(bindingContext).analyze()
         val declarationInfo = NewLQTInfo.getOrException(it.declaration)
         declarationInfo.predicate = PredicateFactory.getBool(constraint.variable)
         declarationInfo.dependsOn.add(constraint)
@@ -117,25 +132,27 @@ object LiquidTypeAnalyzer {
 
     private fun checkCallExpressionArguments(expression: KtCallExpression): Pair<PredicateState, PredicateState>? {
         val callExprInfo = NewLQTInfo.getOrException(expression).safeAs<CallExpressionLiquidType>() ?: return null
-        if (callExprInfo.parameters.all { !it.hasConstraints }) return null
+        if (callExprInfo.function.parameters.all { !it.hasConstraints }) return null
 
-        val parametersConstraints = callExprInfo.parameters
+        val versioned = callExprInfo.withVersions().cast<VersionedCallLiquidType>()
+
+        val parametersConstraints = versioned.function.parameters
                 .flatMap { it.collectPredicates(includeSelf = false) }
 
-        val substitutedArgumentsConstraints = callExprInfo.arguments
+        val substitutedArgumentsConstraints = versioned.arguments
                 .flatMap { it.collectPredicates(includeSelf = true) }
 
         val safePropertyLhs = listOf(
                 substitutedArgumentsConstraints,
                 parametersConstraints,
-                callExprInfo.getPredicate()
+                versioned.getPredicate()
         )
                 .flatten()
                 .collectToPredicateState()
                 .map(SimplifyPredicates::transform)
 //                .map(ConstantPropagator::transform)
 
-        val safePropertyRhs = callExprInfo.parameters
+        val safePropertyRhs = versioned.function.parameters
                 .map { it.finalConstraint() }
                 .map { it.asTerm() }
                 .map { TermFactory.getNegTerm(it) }
@@ -149,7 +166,7 @@ object LiquidTypeAnalyzer {
 
 
     private fun analyzeSingleFile(file: KtFile, lqtAnnotations: List<AnnotationInfo>) {
-        InitialLiquidTypeInfoCollector(bindingContext).collect(file, NewLQTInfo.typeInfo)
+        InitialLiquidTypeInfoCollector(bindingContext, psiElementFactory, ideFileFinder).collect(file, NewLQTInfo.typeInfo)
         addLqTAnnotationsInfo(lqtAnnotations)
         cleanupLqTInfo()
         analyzeLqTConstraintsFunLevel()
@@ -167,7 +184,6 @@ object LiquidTypeAnalyzer {
 
             println("rhs")
             println(rhs)
-
 
 //            psToGraphView("TestL", lhs)
 //            psToGraphView("TestR", rhs)

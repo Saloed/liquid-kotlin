@@ -1,16 +1,17 @@
 import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.SimpleFunctionDescriptor
 import org.jetbrains.kotlin.idea.core.copied
-import org.jetbrains.kotlin.js.resolve.diagnostics.findPsi
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.calls.callUtil.getCall
 import org.jetbrains.kotlin.resolve.calls.callUtil.getResolvedCallWithAssert
 import org.jetbrains.kotlin.resolve.calls.model.ResolvedCall
+import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import org.jetbrains.research.kex.ktype.KexBool
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kex.state.term.Term
+import org.jetbrains.research.kfg.ir.value.instruction.UnaryOpcode
 
 
 abstract class ExpressionAnalyzer<T : KtExpression>(val expression: T) {
@@ -29,11 +30,13 @@ abstract class ExpressionAnalyzer<T : KtExpression>(val expression: T) {
             is KtConstructorCalleeExpression -> CallAnalyzer(expression)
             is KtCallExpression -> CallAnalyzer(expression)
             is KtDotQualifiedExpression -> DotQualifiedExpressionAnalyzer(expression)
+            is KtSafeQualifiedExpression -> SafeQualifiedExpressionAnalyzer(expression)
             is KtArrayAccessExpression -> ArrayAccessExpressionAnalyzer(expression)
             is KtConstructor<*> -> ConstructorAnalyzer(expression)
             is KtFunction -> FunctionAnalyzer(expression)
             is KtDeclaration -> DeclarationAnalyzer(expression)
             is KtStringTemplateExpression -> StringTemplateAnalyzer(expression)
+            is KtUnaryExpression -> UnaryExpressionAnalyzer(expression)
             else -> null
         }.apply {
             this?.bindingContext = bindingContext
@@ -76,9 +79,11 @@ class NameReferenceExpressionAnalyzer(expression: KtNameReferenceExpression) : E
         if (typeInfo.hasConstraints) return typeInfo
         val targetDescriptor = bindingContext[BindingContext.REFERENCE_TARGET, expression]
                 ?: throw IllegalArgumentException("Unknown value reference target descriptor")
-        val targetPsi = targetDescriptor.findPsi()
+
+
+        val targetPsi = targetDescriptor.findPsiWithProxy().safeAs<KtExpression>()
                 ?: throw IllegalArgumentException("Unknown value reference target")
-        val targetTypeInfo = NewLQTInfo.getOrException(targetPsi)
+        val targetTypeInfo = subExprAnalyzer(targetPsi).analyze()
         val constraint = PredicateFactory.getEquality(typeInfo.variable, targetTypeInfo.variable)
         typeInfo.predicate = constraint
         typeInfo.dependsOn.add(targetTypeInfo)
@@ -117,10 +122,9 @@ class IfExpressionAnalyzer(expression: KtIfExpression) : ExpressionAnalyzer<KtIf
 class CallAnalyzer(expression: KtExpression) : ExpressionAnalyzer<KtExpression>(expression) {
 
     data class CallArgumentsInfo(
-            val callExpr: LiquidType,
+            val callExpr: FunctionLiquidType,
             val substitutionTerm: Term,
-            val arguments: List<LiquidType>,
-            val parameters: List<LiquidType>
+            val arguments: List<LiquidType>
     )
 
     override fun analyze(): LiquidType {
@@ -138,10 +142,11 @@ class CallAnalyzer(expression: KtExpression) : ExpressionAnalyzer<KtExpression>(
     }
 
     private fun analyzeCallArguments(resolvedCall: ResolvedCall<*>): CallArgumentsInfo {
-        val element = resolvedCall.candidateDescriptor.findPsi().safeAs<KtExpression>()
+        val element = resolvedCall.candidateDescriptor.findPsiWithProxy().safeAs<KtExpression>()
                 ?: throw IllegalArgumentException("Function PSI not found")
 
-        val typeInfo = subExprAnalyzer(element).analyze()
+        val typeInfo = subExprAnalyzer(element).analyze().safeAs<FunctionLiquidType>()
+                ?: throw IllegalStateException("Not functional call $resolvedCall")
 
         val callArgumentsExpr = resolvedCall.valueArguments.toList()
         val arguments = callArgumentsExpr
@@ -157,10 +162,11 @@ class CallAnalyzer(expression: KtExpression) : ExpressionAnalyzer<KtExpression>(
         val parameters = callArgumentsExpr
                 .map { it.first }
                 .map {
-                    it.findPsi().safeAs<KtExpression>() ?: throw IllegalArgumentException("Parameter $it PSI not found")
+                    it.findPsiWithProxy().safeAs<KtExpression>()
+                            ?: throw IllegalArgumentException("Parameter $it PSI not found")
                 }
-                .map {
-                    subExprAnalyzer(it).analyze()
+                .map { expr ->
+                    typeInfo.dependsOn.first { it.expression == expr }
                 }
 
         val substitution = arguments.zip(parameters)
@@ -169,7 +175,7 @@ class CallAnalyzer(expression: KtExpression) : ExpressionAnalyzer<KtExpression>(
                 .map { TermFactory.equalityTerm(it.second, it.first) }
                 .combineWithAnd()
 
-        return CallArgumentsInfo(typeInfo, substitution, arguments, parameters)
+        return CallArgumentsInfo(typeInfo, substitution, arguments)
     }
 
     private fun analyzeFunctionCall(resolvedCall: ResolvedCall<SimpleFunctionDescriptor>): LiquidType {
@@ -189,12 +195,11 @@ class CallAnalyzer(expression: KtExpression) : ExpressionAnalyzer<KtExpression>(
                 typeInfo.expression,
                 typeInfo.type,
                 typeInfo.variable,
-                callConstraints.parameters,
-                callConstraints.arguments
+                callConstraints.arguments,
+                callConstraints.callExpr
         )
         callTypeInfo.predicates.add(callResult)
         callTypeInfo.predicates.add(callWithArguments)
-        callTypeInfo.dependsOn.add(callConstraints.callExpr)
 
         NewLQTInfo.typeInfo[expression] = callTypeInfo
         return callTypeInfo
@@ -210,8 +215,8 @@ class CallAnalyzer(expression: KtExpression) : ExpressionAnalyzer<KtExpression>(
                 typeInfo.expression,
                 typeInfo.type,
                 typeInfo.variable,
-                callConstraints.parameters,
-                callConstraints.arguments
+                callConstraints.arguments,
+                callConstraints.callExpr
         )
 
         val objectPredicate = PredicateFactory.getNew(callTypeInfo.variable)
@@ -222,7 +227,7 @@ class CallAnalyzer(expression: KtExpression) : ExpressionAnalyzer<KtExpression>(
         val constructorParameters = constructor.valueParameters
 
         for (field in constructorParameters) {
-            val psi = field.findPsi() ?: throw IllegalArgumentException("No PSI for field")
+            val psi = field.findPsiWithProxy() ?: throw IllegalArgumentException("No PSI for field")
             val parameterLqt = NewLQTInfo.getOrException(psi)
             val fieldTerm = TermFactory.getField(
                     parameterLqt.type.makeReference(),
@@ -253,16 +258,25 @@ class FunctionAnalyzer(expression: KtFunction) : ExpressionAnalyzer<KtFunction>(
         if (expression.hasBlockBody()) throw NotImplementedError("Block body is unsupported yet")
         val body = expression.bodyExpression ?: throw IllegalStateException("WTF?")
 
-        val dependencies = expression.valueParameters.map {
+        val parameters = expression.valueParameters.map {
             subExprAnalyzer(it).analyze()
         }
 
         val value = subExprAnalyzer(body).analyze()
         val constraint = PredicateFactory.getEquality(typeInfo.variable, value.variable)
-        typeInfo.predicate = constraint
-        typeInfo.dependsOn.add(value)
-        typeInfo.dependsOn.addAll(dependencies)
-        return typeInfo
+
+        val funTypeInfo = FunctionLiquidType(
+                typeInfo.expression,
+                typeInfo.type,
+                typeInfo.variable,
+                parameters,
+                value
+        )
+
+        funTypeInfo.predicate = constraint
+        NewLQTInfo.typeInfo[expression] = funTypeInfo
+
+        return funTypeInfo
     }
 }
 
@@ -272,12 +286,22 @@ class ConstructorAnalyzer(expression: KtConstructor<*>) : ExpressionAnalyzer<KtC
         val typeInfo = NewLQTInfo.getOrException(expression)
         if (typeInfo.hasConstraints) return typeInfo
 
-        val dependencies = expression.getValueParameters().map {
+        val parameters = expression.getValueParameters().map {
             subExprAnalyzer(it).analyze()
         }
-        typeInfo.predicate = PredicateFactory.getBool(TermFactory.getTrue())
-        typeInfo.dependsOn.addAll(dependencies)
-        return typeInfo
+
+        val funTypeInfo = FunctionLiquidType(
+                typeInfo.expression,
+                typeInfo.type,
+                typeInfo.variable,
+                parameters,
+                null
+        )
+
+        funTypeInfo.predicate = PredicateFactory.getBool(TermFactory.getTrue())
+        NewLQTInfo.typeInfo[expression] = funTypeInfo
+
+        return funTypeInfo
     }
 
 }
@@ -308,6 +332,45 @@ class DotQualifiedExpressionAnalyzer(expression: KtDotQualifiedExpression) : Exp
     }
 }
 
+
+class UnaryExpressionAnalyzer(expression: KtUnaryExpression) : ExpressionAnalyzer<KtUnaryExpression>(expression) {
+    override fun analyze(): LiquidType {
+        val typeInfo = NewLQTInfo.getOrException(expression)
+        if (typeInfo.hasConstraints) return typeInfo
+
+        val expr = expression.baseExpression ?: throw IllegalArgumentException("No sub expression for $expression")
+        val exprLqt = subExprAnalyzer(expr).analyze()
+
+        val operation = expression.operationToken
+        val opcode = UnaryOpcode.fromOperationToken(operation)
+        val value = TermFactory.getUnaryTerm(exprLqt.variable, opcode)
+
+        val constraint = PredicateFactory.getEquality(typeInfo.variable, value)
+        typeInfo.predicate = constraint
+        typeInfo.dependsOn.add(exprLqt)
+
+        return typeInfo
+    }
+
+}
+
+class SafeQualifiedExpressionAnalyzer(expression: KtSafeQualifiedExpression) : ExpressionAnalyzer<KtSafeQualifiedExpression>(expression) {
+    override fun analyze(): LiquidType {
+        val typeInfo = NewLQTInfo.getOrException(expression)
+        if (typeInfo.hasConstraints) return typeInfo
+
+        val receiver = subExprAnalyzer(expression.receiverExpression).analyze()
+        val check = TermFactory.equalityTerm(receiver.variable, TermFactory.getNull())
+        val result = TermFactory.getIf(check, TermFactory.getNull(), receiver.variable)
+
+        val constraint = PredicateFactory.getEquality(typeInfo.variable, result)
+        typeInfo.predicate = constraint
+        typeInfo.dependsOn.add(receiver)
+
+        return typeInfo
+    }
+
+}
 
 class ArrayAccessExpressionAnalyzer(expression: KtArrayAccessExpression) : ExpressionAnalyzer<KtArrayAccessExpression>(expression) {
     override fun analyze(): LiquidType {

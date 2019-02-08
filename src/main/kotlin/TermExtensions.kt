@@ -20,6 +20,7 @@ import org.jetbrains.research.kex.state.transformer.Transformer
 import org.jetbrains.research.kfg.CM
 import org.jetbrains.research.kfg.ir.value.instruction.BinaryOpcode
 import org.jetbrains.research.kfg.ir.value.instruction.CmpOpcode
+import org.jetbrains.research.kfg.ir.value.instruction.UnaryOpcode
 
 object TokenMapping {
     val cmpTokenMap = hashMapOf(
@@ -139,6 +140,10 @@ fun TermFactory.getIf(cond: Term, thenExpr: Term, elseExpr: Term): Term {
     return IfTerm(thenExpr.type, cond, thenExpr, elseExpr)
 }
 
+fun UnaryOpcode.Companion.fromOperationToken(token: IElementType) = when (token) {
+    KtTokens.MINUS -> UnaryOpcode.NEG
+    else -> throw IllegalArgumentException("Not unary operation: $token")
+}
 
 fun Predicate.asTerm() = when (this) {
     is EqualityPredicate -> TermFactory.getCmp(CmpOpcode.Eq(), lhv, rhv)
@@ -178,6 +183,3 @@ fun List<Term>.combineWithAnd() = combineWith { lhs, rhs ->
 fun List<Term>.combineWithOr() = combineWith { lhs, rhs ->
     TermFactory.getBinary(KexBool, BinaryOpcode.Or(), lhs, rhs)
 }
-
-
-

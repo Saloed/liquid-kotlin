@@ -59,6 +59,7 @@ dependencies {
     compile "com.beust:klaxon:3.0.6"
     compile "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+//    compile "org.jetbrains.kotlin:kotlin-compiler:$kotlin_version"
     compile "info.leadinglight:jdot:1.0"
     compile files(["kex/core/target/classes", "kex/kfg/target/classes", "kex/kex-util/target/classes"]){
         builtBy 'compileKex'

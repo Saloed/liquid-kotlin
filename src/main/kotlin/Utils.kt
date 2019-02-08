@@ -12,5 +12,3 @@ public inline fun <T, X> Iterable<Pair<T?, X?>>.pairNotNull() =
                 .map { it.first!! to it.second!! }
 
 fun reportError(message: String) = System.err.println(message)
-
-inline fun <reified T> Any?.safeAs(): T? = this as? T

@@ -1,3 +1,4 @@
+import cucumber.api.java.it.Ma
 import org.jetbrains.research.kex.state.predicate.EqualityPredicate
 import org.jetbrains.research.kex.state.term.BinaryTerm
 import org.jetbrains.research.kex.state.term.CmpTerm
@@ -57,8 +58,11 @@ object SimplifyPredicates : Transformer<SimplifyPredicates> {
 
 }
 
-class RenameVariables(val prefix: Int) : Transformer<RenameVariables> {
-    override fun transformValue(term: ValueTerm) = tf.getValue(term.type, "${prefix}_${term.name}").apply {
-        additionalInfo = term.additionalInfo
+class RenameVariables(val variablePrefix: Map<String, Int>) : Transformer<RenameVariables> {
+    override fun transformValue(term: ValueTerm): ValueTerm {
+        val prefix = variablePrefix[term.name] ?: return term
+        return tf.getValue(term.type, "${prefix}_${term.name}").apply {
+            additionalInfo = term.additionalInfo
+        }
     }
 }
