@@ -13,8 +13,6 @@ import org.jetbrains.kotlin.idea.findUsages.KotlinFunctionFindUsagesOptions
 import org.jetbrains.kotlin.idea.findUsages.KotlinPropertyFindUsagesOptions
 import org.jetbrains.kotlin.idea.refactoring.getLineNumber
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
-import org.jetbrains.kotlin.idea.search.allScope
-import org.jetbrains.kotlin.idea.util.getFileResolutionScope
 import org.jetbrains.kotlin.load.kotlin.VirtualFileFinder
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtExpression
