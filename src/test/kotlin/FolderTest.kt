@@ -12,15 +12,14 @@ open class FolderProjectTest : LightCodeInsightFixtureTestCase() {
 
     override fun getTestDataPath() = testFolder
 
+    override fun getProjectDescriptor() = KotlinProjectWithLqTDescriptor.INSTANCE
+
     override fun setUp() {
         super.setUp()
-//        addAnnotationLibrary()
         val directory = myFixture.copyDirectoryToProject("/", "")
         baseDirectoryPsi = myFixture.psiManager.findDirectory(directory)!!
     }
 
-    private fun addAnnotationLibrary() = PsiTestUtil.addLibrary(myModule, "annotation/build/libs/annotation.jar")
-
-    fun testSimple() = LiquidTypeAnalyzer.analyze(myModule.project)
+    fun testSimple() = LiquidTypeAnalyzer.analyze(project)
 
 }
