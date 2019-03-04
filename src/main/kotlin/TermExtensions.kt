@@ -3,14 +3,13 @@ import org.jetbrains.kotlin.KtNodeTypes
 import org.jetbrains.kotlin.js.descriptorUtils.getJetTypeFqName
 import org.jetbrains.kotlin.js.descriptorUtils.nameIfStandardType
 import org.jetbrains.kotlin.lexer.KtTokens
-import org.jetbrains.kotlin.psi.KtTypeReference
-import org.jetbrains.kotlin.types.DeferredType
-import org.jetbrains.kotlin.types.KotlinType
-import org.jetbrains.kotlin.types.SimpleType
+import org.jetbrains.kotlin.resolve.constants.*
+import org.jetbrains.kotlin.types.*
 import org.jetbrains.kotlin.types.checker.isClassType
 import org.jetbrains.kotlin.types.typeUtil.isBoolean
 import org.jetbrains.kotlin.types.typeUtil.isChar
 import org.jetbrains.kotlin.types.typeUtil.isInt
+import org.jetbrains.kotlin.types.typeUtil.isTypeParameter
 import org.jetbrains.research.kex.ktype.*
 import org.jetbrains.research.kex.state.BasicState
 import org.jetbrains.research.kex.state.PredicateState
@@ -74,6 +73,19 @@ fun TermFactory.binaryTermForOpToken(token: IElementType, left: Term, right: Ter
     else -> throw IllegalArgumentException("Unknown operation type")
 }
 
+fun TermFactory.fromConstant(value: ConstantValue<*>) = when (value) {
+    is BooleanValue -> getBool(value.value)
+    is ByteValue -> getByte(value.value)
+    is DoubleValue -> getDouble(value.value)
+    is FloatValue -> getFloat(value.value)
+    is IntValue -> getInt(value.value)
+    is LongValue -> getLong(value.value)
+    is NullValue -> getNull()
+    is ShortValue -> getShort(value.value)
+    is StringValue -> getString(value.value)
+    else -> throw IllegalArgumentException("Constant type is unknown: $value")
+}
+
 fun TermFactory.fromConstant(type: IElementType, value: String) = when (type) {
     KtNodeTypes.BOOLEAN_CONSTANT -> getBool(value.toBoolean())
     KtNodeTypes.INTEGER_CONSTANT -> getInt(value.toInt())
@@ -104,8 +116,15 @@ fun getArrayType(type: KotlinType): KexArray {
 
 fun getClassType(type: SimpleType) = KexClass(CM.getByName(type.getJetTypeFqName(false)))
 
+fun getTypeParameter(type: SimpleType): KexType {
+    val descriptor = TypeUtils.getTypeParameterDescriptorOrNull(type)
+            ?: throw IllegalArgumentException("Type parameter descriptor is unknown")
+    return descriptor.upperBounds.first().toKexType()
+}
+
 fun getSimpleType(type: SimpleType) = when {
     type.isClassType -> getClassType(type)
+    type.isTypeParameter() -> getTypeParameter(type)
     else -> throw IllegalArgumentException("Unknown type $type")
 }
 
@@ -118,6 +137,7 @@ fun KotlinType.toKexType(): KexType = when {
 //    isArrayType(this) -> getArrayType(this)
     this is SimpleType -> getSimpleType(this)
     this is DeferredType -> unwrap().toKexType()
+    this is FlexibleType -> unwrap().lowerIfFlexible().toKexType()
     else -> throw IllegalArgumentException("Unknown type $this")
 }
 

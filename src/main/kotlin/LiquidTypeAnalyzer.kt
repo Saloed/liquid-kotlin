@@ -8,9 +8,12 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.newvfs.impl.VirtualFileImpl
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiManager
+import org.jetbrains.kotlin.config.*
 import org.jetbrains.kotlin.idea.caches.resolve.KotlinCacheServiceImpl
 import org.jetbrains.kotlin.idea.findUsages.KotlinFunctionFindUsagesOptions
 import org.jetbrains.kotlin.idea.findUsages.KotlinPropertyFindUsagesOptions
+import org.jetbrains.kotlin.idea.internal.KotlinBytecodeToolWindow
+import org.jetbrains.kotlin.idea.project.languageVersionSettings
 import org.jetbrains.kotlin.idea.refactoring.getLineNumber
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.load.kotlin.VirtualFileFinder
@@ -48,13 +51,13 @@ object LiquidTypeAnalyzer {
 
     @JvmStatic
     fun analyze(project: Project) {
+
         val projectRootManager = ProjectRootManager.getInstance(project)
         val psiManager = PsiManager.getInstance(project)
 
         psiDocumentManager = PsiDocumentManager.getInstance(project)
         psiElementFactory = KtPsiFactory(project)
         ideFileFinder = VirtualFileFinder.getInstance(project)
-
 
         findUsagesManager = (FindManager.getInstance(project) as FindManagerImpl).findUsagesManager
         findPropertyUsagesOptions = KotlinPropertyFindUsagesOptions(project)
@@ -71,7 +74,7 @@ object LiquidTypeAnalyzer {
 
         resolutionFacade = KotlinCacheServiceImpl(project).getResolutionFacade(allKtFilesPsi)
 
-        bindingContext = MyBindingContext(resolutionFacade.analyzeWithAllCompilerChecks(allKtFilesPsi).bindingContext)
+        bindingContext = resolutionFacade.analyzeWithAllCompilerChecks(allKtFilesPsi).bindingContext
         val processor = LqtAnnotationProcessor(bindingContext, psiElementFactory, resolutionFacade)
 
         for (file in allKtFilesPsi) {
@@ -82,12 +85,38 @@ object LiquidTypeAnalyzer {
 
             val lqtAnnotations = processor.processLqtAnnotations(file)
 
-            bindingContext = lqtAnnotations.map { it.bindingContext }.fold(bindingContext) {
-                acc, bindingContext -> acc.mergeWith(bindingContext)
+            bindingContext = lqtAnnotations.map { it.bindingContext }.fold(bindingContext) { acc, bindingContext ->
+                acc.mergeWith(bindingContext)
             }
-
             analyzeSingleFile(file, lqtAnnotations)
         }
+    }
+
+    fun getKtFileBytecode(file: KtFile): List<ByteArray>? {
+        val configuration = CompilerConfiguration()
+        configuration.put(CommonConfigurationKeys.DISABLE_INLINE, true)
+//            if (!enableAssertions.isSelected) {
+//                configuration.put(JVMConfigurationKeys.DISABLE_CALL_ASSERTIONS, true)
+//                configuration.put(JVMConfigurationKeys.DISABLE_PARAM_ASSERTIONS, true)
+//            }
+//            if (!enableOptimization.isSelected) {
+        configuration.put(JVMConfigurationKeys.DISABLE_OPTIMIZATION, true)
+//            }
+
+//            if (jvm8Target.isSelected) {
+        configuration.put(JVMConfigurationKeys.JVM_TARGET, JvmTarget.JVM_1_8)
+//            }
+//
+//            if (ir.isSelected) {
+//                configuration.put(JVMConfigurationKeys.IR, true)
+//            }
+
+        configuration.languageVersionSettings = file.languageVersionSettings
+
+        val generationState = KotlinBytecodeToolWindow.compileSingleFile(file, configuration) ?: return null
+        val classFiles = generationState.factory.asList()
+
+        return classFiles.map { it.asByteArray() }
     }
 
     private fun analyzeLqTConstraintsFunLevel() =
@@ -102,8 +131,11 @@ object LiquidTypeAnalyzer {
                     }
 
     private fun addLqTAnnotationsInfo(lqtAnnotations: List<AnnotationInfo>) = lqtAnnotations.forEach {
-        InitialLiquidTypeInfoCollector(bindingContext, psiElementFactory, ideFileFinder).collect(it.expression, NewLQTInfo.typeInfo)
-        val constraint = it.expression.LqTAnalyzer(bindingContext).analyze()
+        bindingContext = InitialLiquidTypeInfoCollector.collect(
+                bindingContext, psiElementFactory, ideFileFinder,
+                it.expression, NewLQTInfo.typeInfo
+        )
+        val constraint = it.expression.LqTAnalyzer(bindingContext).apply { annotationInfo = it }.analyze()
         val declarationInfo = NewLQTInfo.getOrException(it.declaration)
         declarationInfo.predicate = PredicateFactory.getBool(constraint.variable)
         declarationInfo.dependsOn.add(constraint)
@@ -130,11 +162,11 @@ object LiquidTypeAnalyzer {
 
     private fun checkCallExpressionArguments(expression: KtCallExpression): Pair<PredicateState, PredicateState>? {
         val callExprInfo = NewLQTInfo.getOrException(expression).safeAs<CallExpressionLiquidType>() ?: return null
-        if (callExprInfo.function.parameters.all { !it.hasConstraints }) return null
+        if (callExprInfo.function.arguments.values.all { !it.hasConstraints }) return null
 
         val versioned = callExprInfo.withVersions().cast<VersionedCallLiquidType>()
 
-        val parametersConstraints = versioned.function.parameters
+        val parametersConstraints = versioned.function.arguments
                 .flatMap { it.collectPredicates(includeSelf = false) }
 
         val substitutedArgumentsConstraints = versioned.arguments
@@ -150,7 +182,7 @@ object LiquidTypeAnalyzer {
                 .map(SimplifyPredicates::transform)
 //                .map(ConstantPropagator::transform)
 
-        val safePropertyRhs = versioned.function.parameters
+        val safePropertyRhs = versioned.function.arguments
                 .map { it.finalConstraint() }
                 .map { it.asTerm() }
                 .map { TermFactory.getNegTerm(it) }
@@ -164,7 +196,10 @@ object LiquidTypeAnalyzer {
 
 
     private fun analyzeSingleFile(file: KtFile, lqtAnnotations: List<AnnotationInfo>) {
-        InitialLiquidTypeInfoCollector(bindingContext, psiElementFactory, ideFileFinder).collect(file, NewLQTInfo.typeInfo)
+        bindingContext = InitialLiquidTypeInfoCollector.collect(
+                bindingContext, psiElementFactory, ideFileFinder,
+                file, NewLQTInfo.typeInfo
+        )
         addLqTAnnotationsInfo(lqtAnnotations)
         cleanupLqTInfo()
         analyzeLqTConstraintsFunLevel()

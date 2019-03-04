@@ -33,7 +33,7 @@ class MyBindingContext(private val bindingContext: BindingContext) : BindingCont
 
 }
 
-class MergedBindingContext(val contexts: List<BindingContext>) : BindingContext {
+class MergedBindingContext(val contexts: MutableList<BindingContext>) : BindingContext {
     override fun <K : Any?, V : Any?> getKeys(slice: WritableSlice<K, V>?): Collection<K> = contexts.flatMap { it.getKeys(slice) }
     override fun <K : Any?, V : Any?> getSliceContents(slice: ReadOnlySlice<K, V>): ImmutableMap<K, V> =
             ImmutableMap.copyOf(
@@ -54,4 +54,5 @@ class MergedBindingContext(val contexts: List<BindingContext>) : BindingContext 
     override fun addOwnDataTo(trace: BindingTrace, commitDiagnostics: Boolean) = TODO()
 }
 
-fun BindingContext.mergeWith(other: BindingContext): BindingContext = MergedBindingContext(listOf(this, other))
+fun BindingContext.mergeWith(other: BindingContext) = MergedBindingContext(arrayListOf(this, other))
+fun BindingContext.asMergeable() = MergedBindingContext(arrayListOf(this))

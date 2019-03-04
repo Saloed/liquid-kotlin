@@ -1,5 +1,7 @@
 import com.intellij.psi.PsiElement
+import org.apache.commons.lang.StringEscapeUtils
 import org.jetbrains.kotlin.psi.KtExpression
+import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.research.kex.ktype.KexType
@@ -21,12 +23,16 @@ object UIDGenerator {
 
 
 class CallExpressionLiquidType(
-        expression: KtExpression,
+        expression: PsiElement,
         type: KexType,
         variable: Term,
-        val arguments: List<LiquidType>,
+        dispatchArgument: LiquidType?,
+        extensionArgument: LiquidType?,
+        arguments: Map<String, LiquidType>,
         val function: FunctionLiquidType
-) : LiquidType(expression, type, variable, (arguments + listOf(function)).toMutableList()) {
+) : FunctionLiquidTypeBase(
+        expression, type, variable, listOf(function), dispatchArgument, extensionArgument, arguments
+) {
 
     override var predicate: Predicate? = null
         set(_) = throw IllegalAccessException("Try to set predicate on call expression Liquid Type")
@@ -47,15 +53,57 @@ class CallExpressionLiquidType(
 }
 
 class FunctionLiquidType(
-        expression: KtExpression,
+        expression: PsiElement,
         type: KexType,
         variable: Term,
-        val parameters: List<LiquidType>,
+        dispatchArgument: LiquidType?,
+        extensionArgument: LiquidType?,
+        parameters: Map<String, LiquidType>,
         val returnValue: LiquidType?
-) : LiquidType(expression, type, variable, (parameters + if (returnValue != null) listOf(returnValue) else emptyList()).toMutableList())
+) : FunctionLiquidTypeBase(
+        expression, type, variable, emptyListIfNull(returnValue), dispatchArgument, extensionArgument, parameters
+)
+
+abstract class FunctionLiquidTypeBase(
+        expression: PsiElement,
+        type: KexType,
+        variable: Term,
+        additionalDependencies: List<LiquidType>,
+        val dispatchArgument: LiquidType?,
+        val extensionArgument: LiquidType?,
+        val arguments: Map<String, LiquidType>
+) : LiquidType(
+        expression, type, variable,
+        (additionalDependencies +
+                emptyListIfNull(dispatchArgument) +
+                emptyListIfNull(extensionArgument) +
+                arguments.values
+                ).toMutableList()
+) {
+    val allArguments = arguments.values + emptyListIfNull(dispatchArgument) + emptyListIfNull(extensionArgument)
+}
+
+
+class ConstantLiquidType(
+        val ktType: KotlinType,
+        expression: PsiElement,
+        type: KexType,
+        variable: Term
+) : LiquidType(expression, type, variable, arrayListOf()) {
+    companion object {
+        fun create(expression: PsiElement, type: KotlinType): LiquidType {
+            val kexType = type.toKexType()
+            val variable = TermFactory.getValue(kexType, "${UIDGenerator.id}").apply {
+                additionalInfo = ": ${expression.text}"
+            }
+            return ConstantLiquidType(type, expression, kexType, variable)
+        }
+    }
+}
+
 
 open class LiquidType(
-        val expression: KtExpression,
+        val expression: PsiElement,
         val type: KexType,
         val variable: Term,
         val dependsOn: MutableList<LiquidType>
@@ -83,6 +131,21 @@ open class LiquidType(
                 },
                 arrayListOf()
         )
+
+        fun createWithoutExpression(element: PsiElement, text: String, type: KexType): LiquidType {
+            val factory = KtPsiFactory(element, false)
+            val txt = StringEscapeUtils.escapeJava(text);
+            val expr = factory.createStringTemplate(txt)
+            return LiquidType(
+                    expr,
+                    type,
+                    TermFactory.getValue(type, "${UIDGenerator.id}").apply {
+                        additionalInfo = ": ${expr.text}"
+                    },
+                    arrayListOf()
+            )
+        }
+
     }
 
     override fun hashCode() = Objects.hash(expression, type, variable)
@@ -98,12 +161,8 @@ class VersionedFunctionLiquidType(
         lqt: FunctionLiquidType,
         version: Int,
         depends: MutableList<VersionedLiquidType>
-) : VersionedLiquidType(lqt, version, depends) {
-    var parameters: List<VersionedLiquidType> = emptyList()
-        set(value) {
-            field = value
-            depends.addAll(value)
-        }
+) : VersionedFunctionLiquidTypeBase(lqt, version, depends) {
+
     var returnValue: VersionedLiquidType? = null
         set(value) {
             if (value != null) {
@@ -113,17 +172,11 @@ class VersionedFunctionLiquidType(
         }
 }
 
-
 class VersionedCallLiquidType(
         lqt: CallExpressionLiquidType,
         version: Int,
         depends: MutableList<VersionedLiquidType>
-) : VersionedLiquidType(lqt, version, depends) {
-    var arguments: List<VersionedLiquidType> = emptyList()
-        set(value) {
-            field = value
-            depends.addAll(value)
-        }
+) : VersionedFunctionLiquidTypeBase(lqt, version, depends) {
 
     var internalFunction: VersionedFunctionLiquidType? = null
         set(value) {
@@ -134,7 +187,36 @@ class VersionedCallLiquidType(
     val function: VersionedFunctionLiquidType
         get() = internalFunction ?: throw IllegalStateException("Try to get unset field")
 
+}
 
+
+abstract class VersionedFunctionLiquidTypeBase(
+        lqt: FunctionLiquidTypeBase,
+        version: Int,
+        depends: MutableList<VersionedLiquidType>
+) : VersionedLiquidType(lqt, version, depends) {
+
+    var arguments: List<VersionedLiquidType> = emptyList()
+        set(value) {
+            field = value
+            depends.addAll(value)
+        }
+
+    var dispatchArgument: VersionedLiquidType? = null
+        set(value) {
+            if (value != null) {
+                field = value
+                depends.add(value)
+            }
+        }
+
+    var extensionArgument: VersionedLiquidType? = null
+        set(value) {
+            if (value != null) {
+                field = value
+                depends.add(value)
+            }
+        }
 }
 
 open class VersionedLiquidType(val lqt: LiquidType, val version: Int, val depends: MutableList<VersionedLiquidType>) {
@@ -220,16 +302,20 @@ class LiquidTypeVersioner {
             is CallExpressionLiquidType -> {
                 val versioned = new.cast<VersionedCallLiquidType>()
                 val newVersion = UIDGenerator.id
-                versioned.arguments = lqt.arguments.map { makeVersion(it, version) }
+                versioned.arguments = lqt.arguments.map { makeVersion(it.value, version) }
+                versioned.dispatchArgument = lqt.dispatchArgument?.let { makeVersion(it, version) }
+                versioned.extensionArgument = lqt.extensionArgument?.let { makeVersion(it, version) }
                 versioned.internalFunction = makeVersion(lqt.function, newVersion).cast()
                 val otherDependencies = lqt.dependsOn
-                        .filterNot { it in lqt.arguments }
+                        .filterNot { it in lqt.allArguments }
                         .filterNot { it == lqt.function }
                 versioned.depends.addAll(otherDependencies.map { makeVersion(it, version) })
             }
             is FunctionLiquidType -> {
                 val versioned = new.cast<VersionedFunctionLiquidType>()
-                versioned.parameters = lqt.parameters.map { makeVersion(it, version) }
+                versioned.arguments = lqt.arguments.map { makeVersion(it.value, version) }
+                versioned.dispatchArgument = lqt.dispatchArgument?.let { makeVersion(it, version) }
+                versioned.extensionArgument = lqt.extensionArgument?.let { makeVersion(it, version) }
                 versioned.returnValue = lqt.returnValue?.let { makeVersion(it, version) }
             }
             else -> {
@@ -246,6 +332,6 @@ class LiquidTypeVersioner {
 object NewLQTInfo {
     val typeInfo = HashMap<PsiElement, LiquidType>()
     fun getOrException(element: PsiElement) = typeInfo[element]
-            ?: throw IllegalStateException("Type for $element expected")
+            ?: throw IllegalStateException("Type for $element expected: ${element.text}")
 
 }

@@ -62,9 +62,11 @@ dependencies {
 //    compile "org.jetbrains.kotlin:kotlin-compiler:$kotlin_version"
 
     compile "info.leadinglight:jdot:1.0"
+    compile "org.ow2.asm:asm-all:5.2"
     compile files(["kex/core/target/classes", "kex/kfg/target/classes", "kex/kex-util/target/classes"]){
         builtBy 'compileKex'
     }
+
     testCompile group: 'junit', name: 'junit', version: '4.12'
 }
 

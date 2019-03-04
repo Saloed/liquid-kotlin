@@ -1,58 +1,61 @@
+import com.intellij.codeInsight.TargetElementUtil
+import com.intellij.openapi.editor.EditorFactory
 import com.intellij.psi.PsiElement
-import org.jetbrains.kotlin.builtins.BuiltInsPackageFragment
-import org.jetbrains.kotlin.descriptors.*
+import com.intellij.psi.PsiMember
+import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.descriptors.CallableDescriptor
+import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.idea.caches.resolve.analyzeAndGetResult
+import org.jetbrains.kotlin.idea.caches.resolve.util.getJavaOrKotlinMemberDescriptor
+import org.jetbrains.kotlin.idea.intentions.loopToCallChain.isConstant
 import org.jetbrains.kotlin.idea.search.usagesSearch.constructor
+import org.jetbrains.kotlin.idea.search.usagesSearch.descriptor
 import org.jetbrains.kotlin.load.kotlin.VirtualFileFinder
 import org.jetbrains.kotlin.psi.*
-import org.jetbrains.kotlin.renderer.DescriptorRenderer
+import org.jetbrains.kotlin.psi.psiUtil.startOffset
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.calls.callUtil.getType
+import org.jetbrains.kotlin.resolve.constants.IntegerValueTypeConstant
+import org.jetbrains.kotlin.resolve.constants.TypedCompileTimeConstant
+import org.jetbrains.kotlin.resolve.constants.evaluate.ConstantExpressionEvaluator
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.typeUtil.makeNotNullable
 import org.jetbrains.kotlin.utils.addToStdlib.safeAs
+import org.jetbrains.kotlinx.serialization.compiler.resolve.toSimpleType
+import java.util.*
+import kotlin.collections.HashMap
+import kotlin.collections.HashSet
 
-class InitialLiquidTypeInfoCollector(
-        val bindingContext: BindingContext,
+class InitialLiquidTypeInfoCollector private constructor(
+        val outerBindingContext: BindingContext,
         val psiElementFactory: KtPsiFactory,
         val fileFinder: VirtualFileFinder
 ) {
+    private val localBindingContext = MyBindingContext(outerBindingContext)
+    var bindingContext = localBindingContext.asMergeable()
 
-
-    private fun findPackageDescriptor(declaration: DeclarationDescriptor): PackageFragmentDescriptor {
-        var parent = declaration
-        while (true) {
-            if (parent is PackageFragmentDescriptor) return parent
-            if (parent is PackageViewDescriptor) return parent.fragments.first()
-            parent = parent.containingDeclaration ?: break
-        }
-        if (parent is PackageFragmentDescriptor) return parent
-        throw IllegalArgumentException("No package found for declaration $declaration")
-    }
-
-    private fun analyzeUnknownDeclaration(declaration: DeclarationDescriptor, expr: KtExpression): LiquidType? {
-        val packageDescriptor = findPackageDescriptor(declaration)
-        if (packageDescriptor is BuiltInsPackageFragment) {
-            return KotlinBuiltInStub().analyzeUnknownBuiltInDeclaration(declaration, packageDescriptor, expr)
-        } else {
-            throw NotImplementedError("Non builtins classes are not implemented yet")
-        }
-    }
 
     private fun getReferenceExpressionType(expression: KtReferenceExpression): KotlinType? {
         val targetDescriptor = bindingContext[BindingContext.REFERENCE_TARGET, expression] ?: return null
         return when (targetDescriptor) {
-            is PropertyDescriptor -> targetDescriptor.returnType
-            is FunctionDescriptor -> targetDescriptor.returnType
-            else -> targetDescriptor.findPsiWithProxy().safeAs<ValueDescriptor>()?.type
+            is CallableDescriptor -> targetDescriptor.returnType
+            is ClassDescriptor -> targetDescriptor.toSimpleType(false)
+            else -> targetDescriptor.findPsiWithProxy().safeAs<CallableDescriptor>()?.returnType
         }
     }
 
     private fun getFunctionExpressionType(expression: KtFunction) =
             bindingContext[BindingContext.FUNCTION, expression]?.returnType
 
-    private fun getDeclarationExpressionType(expression: KtDeclaration) =
-            bindingContext[BindingContext.DECLARATION_TO_DESCRIPTOR, expression].safeAs<ValueDescriptor>()?.type
-
+    private fun getDeclarationExpressionType(expression: KtDeclaration): KotlinType? {
+        val descriptor = bindingContext[BindingContext.DECLARATION_TO_DESCRIPTOR, expression]
+        return when (descriptor) {
+            is CallableDescriptor -> descriptor.returnType
+            is ClassDescriptor -> descriptor.toSimpleType(nullable = false)
+            else -> null
+        }
+    }
 
     private fun getExpressionType(expression: KtExpression): KotlinType? = expression.getType(bindingContext)
             ?: when (expression) {
@@ -63,10 +66,6 @@ class InitialLiquidTypeInfoCollector(
                 is KtQualifiedExpression -> getQualifiedExpressionType(expression)
                 is KtConstructorCalleeExpression -> getConstructorType(expression)
                 else -> null
-            } ?: expression.let {
-                val context = it.context?.context?.getElementTextWithTypes()
-                reportError("No type info for $expression: ${expression.text}")
-                null
             }
 
     private fun getConstructorExpressionType(expression: KtConstructor<*>) =
@@ -87,46 +86,86 @@ class InitialLiquidTypeInfoCollector(
         else -> null
     }
 
-    public fun collect(root: PsiElement, typeInfo: HashMap<PsiElement, LiquidType>) {
-        val visitor = ExpressionTypingVisitor(typeInfo)
-        root.accept(visitor)
-    }
+
+    inner class ReferenceExpressionResolver : KtTreeVisitorVoidWithTypeElement() {
+
+        private val visited = HashSet<PsiElement>()
+        val nonKotlinElements = ArrayList<PsiElement>()
+
+        private fun analyzeExpressionForBindingContext(expression: KtExpression) {
+            val exprContext = expression.analyzeAndGetResult().apply { throwIfError() }.bindingContext
+            bindingContext = bindingContext.mergeWith(exprContext)
+        }
 
 
-    inner class ExpressionTypingVisitor(val typeInfo: HashMap<PsiElement, LiquidType>) : KtTreeVisitorVoid() {
-
-        override fun visitExpression(expression: KtExpression) {
-            if (typeInfo[expression] != null) return
-            val type = getExpressionType(expression)
-            if (type != null) {
-                val lqt = LiquidType.create(expression, type)
-                typeInfo[expression] = lqt
+        private fun searchForReferenceTarget(expression: KtReferenceExpression): KtDeclaration? {
+            val flags = TargetElementUtil.getInstance().allAccepted and TargetElementUtil.ELEMENT_NAME_ACCEPTED.inv()
+            val editor = expression.findOrCreateEditor()
+            val offset = expression.startOffset
+            editor.caretModel.moveToOffset(offset)
+            val element = TargetElementUtil.getInstance().findTargetElement(editor, flags, offset)
+            EditorFactory.getInstance().releaseEditor(editor)
+            if (element == null) return null
+            if (element !is KtElement) {
+                nonKotlinElements.add(element)
+                if (element !is PsiMember) return null
+                val descriptor = element.getJavaOrKotlinMemberDescriptor()
+                if (descriptor == null) {
+                    reportError("No descriptor for element $element")
+                    return null
+                }
+                localBindingContext[BindingContext.REFERENCE_TARGET, expression] = descriptor
+                PsiProxy.storage[descriptor] = element
+                return null
             }
-            super.visitExpression(expression)
+            val declaration = element.safeAs<KtDeclaration>()
+            val descriptor = declaration?.descriptor
+            if (descriptor != null) {
+                localBindingContext[BindingContext.REFERENCE_TARGET, expression] = descriptor
+            }
+            return declaration
+        }
+
+        override fun visitElement(element: PsiElement) {
+            if (element !in visited) {
+                visited.add(element)
+                super.visitElement(element)
+            }
         }
 
         override fun visitReferenceExpression(expression: KtReferenceExpression) {
             super.visitReferenceExpression(expression)
+
             val targetDescriptor = bindingContext[BindingContext.REFERENCE_TARGET, expression]
-            if (targetDescriptor == null) {
-                reportError("No target for reference ${expression.text}")
+
+            val targetExpr: KtExpression? = if (targetDescriptor != null) {
+                targetDescriptor.findPsiWithProxy().safeAs()
+                        ?: targetDescriptor.findSource(expression).safeAs()
+            } else {
+                searchForReferenceTarget(expression)
+            }
+
+            if (targetExpr == null) {
+                val text = expression.text
+                reportError("No target for reference $text")
                 return
             }
-            val targetExpr = targetDescriptor.findPsiWithProxy().safeAs<KtExpression>()
-            if (targetExpr != null) {
-                return targetExpr.accept(this)
-            }
-            reportError("Declaration from external lib: $targetDescriptor")
 
-            val text = DescriptorRenderer.COMPACT_WITH_MODIFIERS.render(targetDescriptor)
-            val proxyExpr = psiElementFactory.createStringTemplate(text)
+            analyzeExpressionForBindingContext(targetExpr)
+            PsiProxy.storage[targetDescriptor] = targetExpr
+            targetExpr.accept(this)
 
-            val type = analyzeUnknownDeclaration(targetDescriptor, proxyExpr)
+//            reportError("Declaration from external lib: $targetDescriptor")
 
-            if (type != null) {
-                PsiProxy.storage[targetDescriptor] = proxyExpr
-                typeInfo[proxyExpr] = type
-            }
+//            val text = DescriptorRenderer.COMPACT_WITH_MODIFIERS.render(targetDescriptor)
+//            val proxyExpr = psiElementFactory.createStringTemplate(text)
+//
+//            val type = analyzeUnknownDeclaration(targetDescriptor, proxyExpr)
+//
+//            if (type != null) {
+//                PsiProxy.storage[targetDescriptor] = proxyExpr
+//                typeInfo[proxyExpr] = Optional.of(type)
+//            }
         }
 
         override fun visitPackageDirective(directive: KtPackageDirective) {
@@ -135,6 +174,117 @@ class InitialLiquidTypeInfoCollector(
 
         override fun visitImportList(importList: KtImportList) {
             return
+        }
+
+        override fun visitTypeElement(type: KtTypeElement) {
+            return
+        }
+
+    }
+
+    inner class ExpressionTypingVisitor(
+            val typeInfo: HashMap<PsiElement, Optional<LiquidType>>
+    ) : KtTreeVisitorVoidWithTypeElement() {
+
+        override fun visitExpression(expression: KtExpression) {
+            if (typeInfo[expression] != null) return
+            typeInfo[expression] = Optional.empty()
+
+            val constantType = checkConstantType(expression)
+            if (constantType != null) {
+                val lqt = ConstantLiquidType.create(expression, constantType)
+                typeInfo[expression] = Optional.of(lqt)
+                return
+            }
+
+            super.visitExpression(expression)
+
+            val type = getExpressionType(expression)
+            if (type != null) {
+                val lqt = LiquidType.create(expression, type)
+                typeInfo[expression] = Optional.of(lqt)
+            } else {
+                val context = expression.context?.context
+                val ctxText = context?.text
+                val ctxPsi = context?.getElementTextWithTypes()
+                val text = expression.text
+                reportError("No type info for $expression")
+            }
+        }
+
+
+        override fun visitReferenceExpression(expression: KtReferenceExpression) {
+            super.visitReferenceExpression(expression)
+
+            val targetDescriptor = bindingContext[BindingContext.REFERENCE_TARGET, expression]
+            if (targetDescriptor == null) {
+                reportError("No target for reference ${expression.text}")
+                return
+            }
+
+            val targetExprPsi = targetDescriptor.findPsiWithProxy()
+            val targetExpr = targetExprPsi.safeAs<KtExpression>()
+            if (targetExpr == null) {
+                when (targetExprPsi) {
+                    null -> reportError("Target descriptor without source ${expression.text}")
+                    else -> reportError("Target expression is not KtExpression ${expression.text}")
+                }
+                return
+            }
+
+            targetExpr.accept(this)
+        }
+
+        override fun visitPackageDirective(directive: KtPackageDirective) {
+            return
+        }
+
+        override fun visitImportList(importList: KtImportList) {
+            return
+        }
+
+        override fun visitTypeElement(type: KtTypeElement) {
+            return
+        }
+
+
+        private fun checkConstantType(expression: KtExpression): KotlinType? {
+            if (!expression.isConstant()) return null
+            val value = ConstantExpressionEvaluator.getConstant(expression, bindingContext) ?: return null
+            return when (value) {
+                is TypedCompileTimeConstant -> value.type
+                is IntegerValueTypeConstant -> getExpressionType(expression)?.let { value.getType(it) }
+                else -> null
+            }
+        }
+
+    }
+
+    companion object {
+
+        fun collect(
+                bindingContext: BindingContext,
+                psiElementFactory: KtPsiFactory,
+                fileFinder: VirtualFileFinder,
+                root: PsiElement, typeInfo:
+                HashMap<PsiElement, LiquidType>
+        ): MergedBindingContext {
+            val collector = InitialLiquidTypeInfoCollector(bindingContext, psiElementFactory, fileFinder)
+            val optionalTypeInfo = HashMap<PsiElement, Optional<LiquidType>>()
+            optionalTypeInfo.putAll(typeInfo.map { it.key to Optional.of(it.value) })
+            val referenceResolver = collector.ReferenceExpressionResolver()
+            val visitor = collector.ExpressionTypingVisitor(optionalTypeInfo)
+
+            root.accept(referenceResolver)
+            val nonKotlinElements = referenceResolver.nonKotlinElements
+            ClassFileElementResolver.resolve(nonKotlinElements)
+            root.accept(visitor)
+            val collectedInfo = optionalTypeInfo
+                    .filterNot { it.key in typeInfo }
+                    .filter { it.value.isPresent }
+                    .map { it.key to it.value.get() }
+            typeInfo.putAll(collectedInfo)
+            return collector.bindingContext
         }
 
     }
