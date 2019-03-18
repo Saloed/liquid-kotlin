@@ -63,7 +63,13 @@ dependencies {
 
     compile "info.leadinglight:jdot:1.0"
     compile "org.ow2.asm:asm-all:5.2"
-    compile files(["kex/core/target/classes", "kex/kfg/target/classes", "kex/kex-util/target/classes"]){
+    compile files([
+            "kex/core/target/classes",
+            "kex/kfg/target/classes",
+            "kex/kex-util/target/classes",
+            "kex/kex-annotation-processor/target/classes",
+            "kex/kex-test/target/classes"
+    ]){
         builtBy 'compileKex'
     }
 

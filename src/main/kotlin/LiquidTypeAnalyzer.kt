@@ -17,10 +17,7 @@ import org.jetbrains.kotlin.idea.project.languageVersionSettings
 import org.jetbrains.kotlin.idea.refactoring.getLineNumber
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.load.kotlin.VirtualFileFinder
-import org.jetbrains.kotlin.psi.KtCallExpression
-import org.jetbrains.kotlin.psi.KtExpression
-import org.jetbrains.kotlin.psi.KtFile
-import org.jetbrains.kotlin.psi.KtPsiFactory
+import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.utils.addToStdlib.cast
@@ -33,6 +30,8 @@ import org.jetbrains.research.kex.smt.SMTProxySolver
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.term.TermFactory
+import org.jetbrains.research.kfg.ClassManager
+import org.jetbrains.research.kfg.type.TypeFactory
 import java.util.*
 
 object LiquidTypeAnalyzer {
@@ -80,7 +79,8 @@ object LiquidTypeAnalyzer {
         for (file in allKtFilesPsi) {
 
 //            if (!file.name.endsWith("xxx.kt")) continue
-            if (!file.name.endsWith("Test1.kt")) continue
+            if (!file.name.endsWith("testJava.kt")) continue
+//            if (!file.name.endsWith("Test1.kt")) continue
 //            if (!file.name.endsWith("Mian.kt")) continue
 
             val lqtAnnotations = processor.processLqtAnnotations(file)
@@ -122,6 +122,13 @@ object LiquidTypeAnalyzer {
     private fun analyzeLqTConstraintsFunLevel() =
             NewLQTInfo.typeInfo.keys
                     .filterIsInstance<KtExpression>()
+                    .filter { it.text.contains("boo()") }
+                    .sortedBy {
+                        when (it) {
+                            is KtFunction -> 0
+                            else -> 100
+                        }
+                    }
                     .forEach {
                         try {
                             it.LqTAnalyzer(bindingContext).analyze()
@@ -151,7 +158,7 @@ object LiquidTypeAnalyzer {
     private fun initializeSolver(): SMTProxySolver {
         val config = GlobalConfig
         config.initialize(RuntimeConfig, FileConfig("kex/kex.ini"))
-        return SMTProxySolver()
+        return SMTProxySolver(ClassManager().type)
     }
 
 
@@ -161,8 +168,12 @@ object LiquidTypeAnalyzer {
             .pairNotNull()
 
     private fun checkCallExpressionArguments(expression: KtCallExpression): Pair<PredicateState, PredicateState>? {
-        val callExprInfo = NewLQTInfo.getOrException(expression).safeAs<CallExpressionLiquidType>() ?: return null
-        if (callExprInfo.function.arguments.values.all { !it.hasConstraints }) return null
+        val text = expression.text
+        val huy = NewLQTInfo.getOrException(expression)
+        val callExprInfo = NewLQTInfo.getOrException(expression).safeAs<CallExpressionLiquidType>()
+                ?: return null
+        if (callExprInfo.function.arguments.values.all { !it.hasConstraints })
+            return null
 
         val versioned = callExprInfo.withVersions().cast<VersionedCallLiquidType>()
 

@@ -27,7 +27,9 @@ class LqtAnnotationProcessor(
                 it.annotations.findAnnotation(annotationFqName)
             }?.let {
                 it.allValueArguments[Name.identifier("condition")]
-            }?.let { it.value as? String }
+            }?.let {
+                it.value as? String
+            }
 
 
     fun lqtExprForDeclaration(declaration: KtDeclaration, constraint: String): AnnotationInfo {

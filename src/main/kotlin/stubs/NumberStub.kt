@@ -40,7 +40,7 @@ abstract class NumberOperationsStub(typeName: FqName) : Stub(typeName) {
                 "${argument.expression.text} ${opcode.name} ${otherArgument.expression.text}",
                 argument.type
         )
-        val result = TermFactory.getBinary(opcode, argument.variable, otherArgument.variable)
+        val result = TermFactory.getBinary(argument.type, opcode, argument.variable, otherArgument.variable)
         value.predicate = PredicateFactory.getEquality(value.variable, result)
         return setFunctionalLqtValue(lqt, value)
     }

@@ -2,7 +2,6 @@ import com.intellij.codeInsight.TargetElementUtil
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiMember
-import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.CallableDescriptor
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
@@ -98,17 +97,22 @@ class InitialLiquidTypeInfoCollector private constructor(
         }
 
 
-        private fun searchForReferenceTarget(expression: KtReferenceExpression): KtDeclaration? {
+        private fun findSourceForReference(expression: KtReferenceExpression): PsiElement? {
             val flags = TargetElementUtil.getInstance().allAccepted and TargetElementUtil.ELEMENT_NAME_ACCEPTED.inv()
             val editor = expression.findOrCreateEditor()
             val offset = expression.startOffset
             editor.caretModel.moveToOffset(offset)
             val element = TargetElementUtil.getInstance().findTargetElement(editor, flags, offset)
             EditorFactory.getInstance().releaseEditor(editor)
-            if (element == null) return null
+            return element
+        }
+
+        private fun searchForReferenceTarget(expression: KtReferenceExpression): KtDeclaration? {
+            val element = findSourceForReference(expression) ?: return null
             if (element !is KtElement) {
                 nonKotlinElements.add(element)
-                if (element !is PsiMember) return null
+                if (element !is PsiMember)
+                    return null
                 val descriptor = element.getJavaOrKotlinMemberDescriptor()
                 if (descriptor == null) {
                     reportError("No descriptor for element $element")
@@ -126,6 +130,17 @@ class InitialLiquidTypeInfoCollector private constructor(
             return declaration
         }
 
+        private fun getReferenceTargetSource(target: DeclarationDescriptor, expression: KtReferenceExpression): KtExpression? {
+            val element = target.findPsiWithProxy()
+                    ?: target.findSource(expression)
+                    ?: findSourceForReference(expression)
+                    ?: return null
+            PsiProxy.storage[target] = element
+            if (element is KtExpression) return element
+            if (element !is KtElement) nonKotlinElements.add(element)
+            return null
+        }
+
         override fun visitElement(element: PsiElement) {
             if (element !in visited) {
                 visited.add(element)
@@ -139,8 +154,7 @@ class InitialLiquidTypeInfoCollector private constructor(
             val targetDescriptor = bindingContext[BindingContext.REFERENCE_TARGET, expression]
 
             val targetExpr: KtExpression? = if (targetDescriptor != null) {
-                targetDescriptor.findPsiWithProxy().safeAs()
-                        ?: targetDescriptor.findSource(expression).safeAs()
+                getReferenceTargetSource(targetDescriptor, expression)
             } else {
                 searchForReferenceTarget(expression)
             }
@@ -155,17 +169,6 @@ class InitialLiquidTypeInfoCollector private constructor(
             PsiProxy.storage[targetDescriptor] = targetExpr
             targetExpr.accept(this)
 
-//            reportError("Declaration from external lib: $targetDescriptor")
-
-//            val text = DescriptorRenderer.COMPACT_WITH_MODIFIERS.render(targetDescriptor)
-//            val proxyExpr = psiElementFactory.createStringTemplate(text)
-//
-//            val type = analyzeUnknownDeclaration(targetDescriptor, proxyExpr)
-//
-//            if (type != null) {
-//                PsiProxy.storage[targetDescriptor] = proxyExpr
-//                typeInfo[proxyExpr] = Optional.of(type)
-//            }
         }
 
         override fun visitPackageDirective(directive: KtPackageDirective) {
@@ -261,7 +264,6 @@ class InitialLiquidTypeInfoCollector private constructor(
     }
 
     companion object {
-
         fun collect(
                 bindingContext: BindingContext,
                 psiElementFactory: KtPsiFactory,
@@ -277,7 +279,10 @@ class InitialLiquidTypeInfoCollector private constructor(
 
             root.accept(referenceResolver)
             val nonKotlinElements = referenceResolver.nonKotlinElements
-            ClassFileElementResolver.resolve(nonKotlinElements)
+            val resolvedNonKtElements = ClassFileElementResolver.resolve(nonKotlinElements)
+            for ((elem, lqt) in resolvedNonKtElements) {
+                optionalTypeInfo[elem] = Optional.of(lqt)
+            }
             root.accept(visitor)
             val collectedInfo = optionalTypeInfo
                     .filterNot { it.key in typeInfo }

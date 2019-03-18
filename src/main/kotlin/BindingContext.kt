@@ -37,7 +37,7 @@ class MergedBindingContext(val contexts: MutableList<BindingContext>) : BindingC
     override fun <K : Any?, V : Any?> getKeys(slice: WritableSlice<K, V>?): Collection<K> = contexts.flatMap { it.getKeys(slice) }
     override fun <K : Any?, V : Any?> getSliceContents(slice: ReadOnlySlice<K, V>): ImmutableMap<K, V> =
             ImmutableMap.copyOf(
-                    contexts.flatMap { it.getSliceContents(slice).entries }
+                    contexts.flatMap { it.getSliceContents(slice).entries }.toSet()
             )
 
 

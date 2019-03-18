@@ -1,5 +1,6 @@
 import com.intellij.psi.PsiElement
 import org.apache.commons.lang.StringEscapeUtils
+import org.jetbrains.kotlin.psi.KtCallableDeclaration
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.types.KotlinType
@@ -101,6 +102,14 @@ class ConstantLiquidType(
     }
 }
 
+class ReturnLiquidType(
+        expression: PsiElement,
+        type: KexType,
+        variable: Term,
+        dependsOn: MutableList<LiquidType>,
+        val conditionPath: Term,
+        val function: KtCallableDeclaration
+) : LiquidType(expression, type, variable, dependsOn)
 
 open class LiquidType(
         val expression: PsiElement,
@@ -121,6 +130,27 @@ open class LiquidType(
     open fun finalConstraint() = predicate ?: PredicateFactory.getBool(TermFactory.getTrue())
 
     fun withVersions() = VersionedLiquidType.makeVersion(this)
+
+
+    fun collectDescendants(withSelf: Boolean = false, predicate: (LiquidType) -> Boolean): List<LiquidType> {
+        val result = arrayListOf<LiquidType>()
+        val visited = hashSetOf<LiquidType>()
+        val toVisit = LinkedList<LiquidType>()
+        if (withSelf) {
+            toVisit.add(this)
+        } else {
+            visited.add(this)
+            toVisit.addAll(dependsOn)
+        }
+        while (toVisit.isNotEmpty()) {
+            val current = toVisit.pop()
+            if (current in visited) continue
+            visited.add(current)
+            if (predicate(current)) result.add(current)
+            toVisit.addAll(current.dependsOn)
+        }
+        return result
+    }
 
     companion object {
         fun create(expression: KtExpression, type: KotlinType) = LiquidType(
@@ -145,6 +175,8 @@ open class LiquidType(
                     arrayListOf()
             )
         }
+
+        fun createVariable(type: KexType) = TermFactory.getValue(type, "${UIDGenerator.id}")
 
     }
 

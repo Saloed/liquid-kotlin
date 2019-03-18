@@ -42,7 +42,7 @@ fun <T : Any> KClass<out T>.inspectProperties(receiver: T): Map<KCallable<*>, An
         it.isAccessible = true
     }
     val properties = memberProperties.map { it as KProperty1<T, Any?> }.map { it to it.get(receiver) }
-    val getters = memberFunctions.filter { it.name.startsWith("get") }
+    val getters = memberFunctions.filter { it.name.startsWith("get") ||  it.name.startsWith("is") }
 
     val zeroGetters = getters.filter { it.parameters.isEmpty() }.map { it to it.call() }
     val singleGetters = getters.filter { it.parameters.size == 1 }.mapNotNull {
@@ -70,3 +70,5 @@ fun BindingContext.inspectBindingContext(element: PsiElement) =
                         null
                     }
                 }
+
+
