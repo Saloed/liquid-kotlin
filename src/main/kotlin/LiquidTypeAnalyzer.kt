@@ -29,9 +29,7 @@ import org.jetbrains.research.kex.smt.Result
 import org.jetbrains.research.kex.smt.SMTProxySolver
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
-import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kfg.ClassManager
-import org.jetbrains.research.kfg.type.TypeFactory
 import java.util.*
 
 object LiquidTypeAnalyzer {
@@ -122,7 +120,6 @@ object LiquidTypeAnalyzer {
     private fun analyzeLqTConstraintsFunLevel() =
             NewLQTInfo.typeInfo.keys
                     .filterIsInstance<KtExpression>()
-                    .filter { it.text.contains("boo()") }
                     .sortedBy {
                         when (it) {
                             is KtFunction -> 0
@@ -144,7 +141,7 @@ object LiquidTypeAnalyzer {
         )
         val constraint = it.expression.LqTAnalyzer(bindingContext).apply { annotationInfo = it }.analyze()
         val declarationInfo = NewLQTInfo.getOrException(it.declaration)
-        declarationInfo.predicate = PredicateFactory.getBool(constraint.variable)
+        declarationInfo.addPredicate(PredicateFactory.getBool(constraint.variable))
         declarationInfo.dependsOn.add(constraint)
     }
 
@@ -168,39 +165,37 @@ object LiquidTypeAnalyzer {
             .pairNotNull()
 
     private fun checkCallExpressionArguments(expression: KtCallExpression): Pair<PredicateState, PredicateState>? {
-        val text = expression.text
-        val huy = NewLQTInfo.getOrException(expression)
         val callExprInfo = NewLQTInfo.getOrException(expression).safeAs<CallExpressionLiquidType>()
                 ?: return null
+
         if (callExprInfo.function.arguments.values.all { !it.hasConstraints })
             return null
 
         val versioned = callExprInfo.withVersions().cast<VersionedCallLiquidType>()
 
         val parametersConstraints = versioned.function.arguments
-                .flatMap { it.collectPredicates(includeSelf = false) }
+                .map { it.collectPredicates(includeSelf = false) }
+                .chain()
 
         val substitutedArgumentsConstraints = versioned.arguments
-                .flatMap { it.collectPredicates(includeSelf = true) }
+                .map { it.collectPredicates(includeSelf = true) }
+                .chain()
+
+        val callPredicateState = versioned.getPredicate()
+
 
         val safePropertyLhs = listOf(
                 substitutedArgumentsConstraints,
                 parametersConstraints,
-                versioned.getPredicate()
+                callPredicateState
         )
-                .flatten()
-                .collectToPredicateState()
+                .chain()
                 .map(SimplifyPredicates::transform)
 //                .map(ConstantPropagator::transform)
 
         val safePropertyRhs = versioned.function.arguments
-                .map { it.finalConstraint() }
-                .map { it.asTerm() }
-                .map { TermFactory.getNegTerm(it) }
-                .combineWithOr()
-                .toPredicateState()
-                .map(SimplifyPredicates::transform)
-//                .map(ConstantPropagator::transform)
+                .map { it.getPredicate() }
+                .chain()
 
         return safePropertyLhs to safePropertyRhs
     }
@@ -233,7 +228,7 @@ object LiquidTypeAnalyzer {
 //            psToGraphView("TestR", rhs)
 
             try {
-                val result = solver.isPathPossible(lhs, rhs)
+                val result = solver.isViolated(lhs, rhs, negateQuery = true)
                 println("$result ${expr.context?.text}")
                 if (result is Result.SatResult) {
                     println("${result.model}")

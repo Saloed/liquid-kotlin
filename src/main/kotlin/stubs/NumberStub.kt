@@ -3,6 +3,8 @@ package stubs
 import FunctionLiquidType
 import LiquidType
 import org.jetbrains.kotlin.name.FqName
+import org.jetbrains.research.kex.state.BasicState
+import org.jetbrains.research.kex.state.predicate.Predicate
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kfg.ir.value.instruction.BinaryOpcode
@@ -18,8 +20,8 @@ abstract class NumberOperationsStub(typeName: FqName) : Stub(typeName) {
                         argument.type
                 )
                 val negation = TermFactory.getNegTerm(argument.variable)
-                value.predicate = PredicateFactory.getEquality(value.variable, negation)
-                setFunctionalLqtValue(lqt, value)
+                val predicate = PredicateFactory.getEquality(value.variable, negation)
+                setFunctionalLqtValue(lqt, value, predicate)
             },
             function("minus") { makeBinaryOperation(BinaryOpcode.Sub(), it) },
             function("plus") { makeBinaryOperation(BinaryOpcode.Add(), it) },
@@ -41,11 +43,11 @@ abstract class NumberOperationsStub(typeName: FqName) : Stub(typeName) {
                 argument.type
         )
         val result = TermFactory.getBinary(argument.type, opcode, argument.variable, otherArgument.variable)
-        value.predicate = PredicateFactory.getEquality(value.variable, result)
-        return setFunctionalLqtValue(lqt, value)
+        val predicate = PredicateFactory.getEquality(value.variable, result)
+        return setFunctionalLqtValue(lqt, value, predicate)
     }
 
-    private fun setFunctionalLqtValue(lqt: FunctionLiquidType, value: LiquidType): FunctionLiquidType {
+    private fun setFunctionalLqtValue(lqt: FunctionLiquidType, value: LiquidType, vararg predicates: Predicate): FunctionLiquidType {
         val funTypeInfo = FunctionLiquidType(
                 lqt.expression,
                 lqt.type,
@@ -56,7 +58,8 @@ abstract class NumberOperationsStub(typeName: FqName) : Stub(typeName) {
                 value
         )
         val constraint = PredicateFactory.getEquality(lqt.variable, value.variable)
-        funTypeInfo.predicate = constraint
+        val ps = BasicState(predicates.toList() + listOf(constraint))
+        funTypeInfo.addPredicate(ps)
         return funTypeInfo
     }
 }

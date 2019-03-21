@@ -6,6 +6,9 @@ import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.research.kex.ktype.KexType
+import org.jetbrains.research.kex.state.BasicState
+import org.jetbrains.research.kex.state.ChainState
+import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.predicate.Predicate
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.term.Term
@@ -33,25 +36,7 @@ class CallExpressionLiquidType(
         val function: FunctionLiquidType
 ) : FunctionLiquidTypeBase(
         expression, type, variable, listOf(function), dispatchArgument, extensionArgument, arguments
-) {
-
-    override var predicate: Predicate? = null
-        set(_) = throw IllegalAccessException("Try to set predicate on call expression Liquid Type")
-
-    val predicates = arrayListOf<Predicate>()
-
-    override val hasConstraints: Boolean
-        get() = predicates.isNotEmpty()
-
-    override fun finalConstraint() = when {
-        predicates.isEmpty() -> PredicateFactory.getBool(TermFactory.getTrue())
-        predicates.size == 1 -> predicates[0]
-        else -> throw IllegalStateException("Try to get final constraints for call expression")
-    }
-
-    override fun getPredicate(): List<Predicate> = predicates
-
-}
+)
 
 class FunctionLiquidType(
         expression: PsiElement,
@@ -95,7 +80,7 @@ class ConstantLiquidType(
         fun create(expression: PsiElement, type: KotlinType): LiquidType {
             val kexType = type.toKexType()
             val variable = TermFactory.getValue(kexType, "${UIDGenerator.id}").apply {
-                additionalInfo = ": ${expression.text}"
+                additionalInfo = ": ${expression.text.replace('\n', ' ')}"
             }
             return ConstantLiquidType(type, expression, kexType, variable)
         }
@@ -111,6 +96,8 @@ class ReturnLiquidType(
         val function: KtCallableDeclaration
 ) : LiquidType(expression, type, variable, dependsOn)
 
+
+//todo: use predicate state
 open class LiquidType(
         val expression: PsiElement,
         val type: KexType,
@@ -118,16 +105,42 @@ open class LiquidType(
         val dependsOn: MutableList<LiquidType>
 ) {
 
-    open var predicate: Predicate? = null
+    private var predicate: PredicateState? = null
 
-    open val hasConstraints: Boolean
+    val hasConstraints: Boolean
         get() = predicate != null
 
 
-    open fun getPredicate(): List<Predicate> = if (predicate != null) listOf(predicate!!) else emptyList()
+    fun addEmptyPredicate() {
+        if (this.predicate != null)
+            return reportError("Try to add predicate to: [$this] | EMPTY ")
+        predicate = BasicState()
+    }
+
+    fun addPredicate(predicate: Predicate) {
+        if (this.predicate != null)
+            return reportError("Try to add predicate to: [$this] | $predicate ")
+        this.predicate = BasicState(listOf(predicate))
+    }
+
+    fun addPredicate(predicate: PredicateState) {
+        if (this.predicate != null)
+            return reportError("Try to add predicate STATE to: [$this] | $predicate ")
+        this.predicate = predicate
+    }
+
+    open fun getPredicate(): PredicateState = if (predicate != null) predicate!! else BasicState()
 
 
-    open fun finalConstraint() = predicate ?: PredicateFactory.getBool(TermFactory.getTrue())
+    open fun finalConstraint() = predicate?.let { finalConstraint(it) }
+            ?: PredicateFactory.getBool(TermFactory.getTrue())
+
+    private fun finalConstraint(ps: PredicateState) = when {
+        ps.isEmpty -> PredicateFactory.getBool(TermFactory.getTrue())
+        ps is BasicState && ps.size == 1 -> ps.predicates.first()
+        else -> throw IllegalArgumentException("Final constraint is not supported for $ps")
+    }
+
 
     fun withVersions() = VersionedLiquidType.makeVersion(this)
 
@@ -157,7 +170,7 @@ open class LiquidType(
                 expression,
                 type.toKexType(),
                 TermFactory.getValue(type.toKexType(), "${UIDGenerator.id}").apply {
-                    additionalInfo = ": ${expression.text}"
+                    additionalInfo = ": ${expression.text.replace('\n', ' ')}"
                 },
                 arrayListOf()
         )
@@ -170,7 +183,7 @@ open class LiquidType(
                     expr,
                     type,
                     TermFactory.getValue(type, "${UIDGenerator.id}").apply {
-                        additionalInfo = ": ${expr.text}"
+                        additionalInfo = ": ${expr.text.replace('\n', ' ')}"
                     },
                     arrayListOf()
             )
@@ -261,7 +274,7 @@ open class VersionedLiquidType(val lqt: LiquidType, val version: Int, val depend
             && lqt == other.lqt && version == other.version
 
 
-    fun getPredicate(): List<Predicate> {
+    fun getPredicate(): PredicateState {
         val renameMap = collectRenamingMap()
         val renamer = RenameVariables(renameMap)
         return lqt.getPredicate().map(renamer::transform)
@@ -306,10 +319,11 @@ open class VersionedLiquidType(val lqt: LiquidType, val version: Int, val depend
     }
 
 
-    fun collectPredicates(includeSelf: Boolean): List<Predicate> =
+    fun collectPredicates(includeSelf: Boolean): PredicateState =
             collectTypeDependencies()
                     .filter { includeSelf || it != this }
-                    .flatMap { it.getPredicate() }
+                    .map { it.getPredicate() }
+                    .chain()
 
 
     companion object {

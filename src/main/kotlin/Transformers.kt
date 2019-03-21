@@ -1,4 +1,3 @@
-import cucumber.api.java.it.Ma
 import org.jetbrains.research.kex.state.predicate.EqualityPredicate
 import org.jetbrains.research.kex.state.term.BinaryTerm
 import org.jetbrains.research.kex.state.term.CmpTerm
