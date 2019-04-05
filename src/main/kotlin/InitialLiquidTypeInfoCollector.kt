@@ -8,6 +8,7 @@ import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.idea.caches.resolve.analyzeAndGetResult
 import org.jetbrains.kotlin.idea.caches.resolve.util.getJavaOrKotlinMemberDescriptor
 import org.jetbrains.kotlin.idea.intentions.loopToCallChain.isConstant
+import org.jetbrains.kotlin.idea.quickfix.createFromUsage.callableBuilder.getTypeParameters
 import org.jetbrains.kotlin.idea.search.usagesSearch.constructor
 import org.jetbrains.kotlin.idea.search.usagesSearch.descriptor
 import org.jetbrains.kotlin.load.kotlin.VirtualFileFinder
@@ -19,6 +20,8 @@ import org.jetbrains.kotlin.resolve.constants.IntegerValueTypeConstant
 import org.jetbrains.kotlin.resolve.constants.TypedCompileTimeConstant
 import org.jetbrains.kotlin.resolve.constants.evaluate.ConstantExpressionEvaluator
 import org.jetbrains.kotlin.types.KotlinType
+import org.jetbrains.kotlin.types.typeUtil.isSubtypeOf
+import org.jetbrains.kotlin.types.typeUtil.isUnit
 import org.jetbrains.kotlin.types.typeUtil.makeNotNullable
 import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import org.jetbrains.kotlinx.serialization.compiler.resolve.toSimpleType
@@ -56,16 +59,47 @@ class InitialLiquidTypeInfoCollector private constructor(
         }
     }
 
-    private fun getExpressionType(expression: KtExpression): KotlinType? = expression.getType(bindingContext)
-            ?: when (expression) {
-                is KtReferenceExpression -> getReferenceExpressionType(expression)
-                is KtConstructor<*> -> getConstructorExpressionType(expression)
-                is KtFunction -> getFunctionExpressionType(expression)
-                is KtDeclaration -> getDeclarationExpressionType(expression)
-                is KtQualifiedExpression -> getQualifiedExpressionType(expression)
-                is KtConstructorCalleeExpression -> getConstructorType(expression)
-                else -> null
+    private fun selectType(myType: KotlinType, bcType: KotlinType): KotlinType {
+        val constructorsEqual = myType.constructor == bcType.constructor
+        val myParams = myType.getTypeParameters().toList()
+        val bcParams = bcType.getTypeParameters().toList()
+
+        return when {
+            bcType.isSubtypeOf(myType) -> bcType
+            myType.isSubtypeOf(bcType) -> myType
+            constructorsEqual && myParams.size < bcParams.size -> myType
+            constructorsEqual && myParams.size > bcParams.size -> bcType
+
+            //fixme: tricky hack with Unit
+            bcType.isUnit() -> myType
+            myType.isUnit() -> bcType
+
+            else -> {
+                reportError("Inconsistent types: BC: $bcType  My: $myType")
+                myType
             }
+        }
+    }
+
+    private fun getExpressionType(expression: KtExpression): KotlinType? {
+        val myType = when (expression) {
+            is KtReferenceExpression -> getReferenceExpressionType(expression)
+            is KtConstructor<*> -> getConstructorExpressionType(expression)
+            is KtFunction -> getFunctionExpressionType(expression)
+            is KtDeclaration -> getDeclarationExpressionType(expression)
+            is KtQualifiedExpression -> getQualifiedExpressionType(expression)
+            is KtConstructorCalleeExpression -> getConstructorType(expression)
+            else -> null
+        }
+        val bcType = expression.getType(bindingContext)
+
+        return when {
+            myType == null -> bcType
+            bcType == null -> myType
+            myType == bcType -> bcType
+            else -> selectType(myType, bcType)
+        }
+    }
 
     private fun getConstructorExpressionType(expression: KtConstructor<*>) =
             expression.constructor?.returnType
@@ -211,7 +245,7 @@ class InitialLiquidTypeInfoCollector private constructor(
                 val ctxText = context?.text
                 val ctxPsi = context?.getElementTextWithTypes()
                 val text = expression.text
-                reportError("No type info for $expression")
+                reportError("No type info for $expression : ${expression.text}")
             }
         }
 

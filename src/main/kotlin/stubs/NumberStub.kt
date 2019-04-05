@@ -32,7 +32,7 @@ abstract class NumberOperationsStub(typeName: FqName) : Stub(typeName) {
     )
 
 
-    private fun makeBinaryOperation(opcode: BinaryOpcode, lqt: FunctionLiquidType): FunctionLiquidType {
+    protected fun makeBinaryOperation(opcode: BinaryOpcode, lqt: FunctionLiquidType): FunctionLiquidType {
         val argument = lqt.dispatchArgument!!
         val otherArgument = lqt.arguments["other"]
                 ?: throw IllegalArgumentException("No other argument supplied for Number.minus")
@@ -47,7 +47,7 @@ abstract class NumberOperationsStub(typeName: FqName) : Stub(typeName) {
         return setFunctionalLqtValue(lqt, value, predicate)
     }
 
-    private fun setFunctionalLqtValue(lqt: FunctionLiquidType, value: LiquidType, vararg predicates: Predicate): FunctionLiquidType {
+    protected fun setFunctionalLqtValue(lqt: FunctionLiquidType, value: LiquidType, vararg predicates: Predicate): FunctionLiquidType {
         val funTypeInfo = FunctionLiquidType(
                 lqt.expression,
                 lqt.type,
@@ -85,3 +85,24 @@ object LongStub : NumberOperationsStub(FqName("kotlin.Long"))
 //        ),
 //        emptyMap()
 //)
+
+
+object BooleanStub : NumberOperationsStub(FqName("kotlin.Boolean")) {
+    override val properties = listOf<PropertyStub>()
+    override val functions = listOf(
+            function("not") { lqt ->
+                val argument = lqt.dispatchArgument!!
+                val value = LiquidType.createWithoutExpression(
+                        argument.expression,
+                        "-${argument.expression.text}",
+                        argument.type
+                )
+                val negation = TermFactory.getNegTerm(argument.variable)
+                val predicate = PredicateFactory.getEquality(value.variable, negation)
+                setFunctionalLqtValue(lqt, value, predicate)
+            },
+            function("and") { makeBinaryOperation(BinaryOpcode.And(), it) },
+            function("or") { makeBinaryOperation(BinaryOpcode.Or(), it) },
+            function("xor") { makeBinaryOperation(BinaryOpcode.Xor(), it) }
+    )
+}

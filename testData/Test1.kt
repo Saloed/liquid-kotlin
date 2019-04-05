@@ -9,9 +9,9 @@ fun abs(a: Int) = if (a >= 0) a else -a
 
 // && it.elements.size == 2
 
-//fun inRange(it: Int) = it < Int.MAX_VALUE && it > Int.MIN_VALUE
+fun inRange(it: Int) = it < Int.MAX_VALUE && it > Int.MIN_VALUE
 
-fun inRange(it: Int) = it < 2147483645 && it > -2147483645
+//fun inRange(it: Int) = it < 2147483645 && it > -2147483645
 
 fun checked(@LqT("it.x >= 0 && it.y >= 0") p: Point) = p.x + p.y
 

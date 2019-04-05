@@ -12,7 +12,8 @@ object KotlinBuiltInStub {
 
     private val knownStubs = listOf(
             IntStub,
-            LongStub
+            LongStub,
+            BooleanStub
     )
 
     init {

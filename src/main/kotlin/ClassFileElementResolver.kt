@@ -1,24 +1,31 @@
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiMethod
+import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import org.jetbrains.research.kex.asm.state.PredicateStateAnalysis
 import org.jetbrains.research.kex.asm.state.PredicateStateBuilder
 import org.jetbrains.research.kex.asm.transform.LoopDeroller
-import org.jetbrains.research.kex.ktype.KexType
-import org.jetbrains.research.kex.ktype.kexType
+import org.jetbrains.research.kex.config.FileConfig
+import org.jetbrains.research.kex.config.GlobalConfig
+import org.jetbrains.research.kex.config.RuntimeConfig
+import org.jetbrains.research.kex.ktype.*
+import org.jetbrains.research.kex.smt.SMTProxySolver
 import org.jetbrains.research.kex.state.BasicState
+import org.jetbrains.research.kex.state.ChainState
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.term.Term
 import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kex.state.transformer.BoolTypeAdapter
 import org.jetbrains.research.kex.state.transformer.ConstantPropagator
+import org.jetbrains.research.kex.state.transformer.VariableCollector
 import org.jetbrains.research.kfg.ClassManager
 import org.jetbrains.research.kfg.Package
 import org.jetbrains.research.kfg.analysis.LoopSimplifier
 import org.jetbrains.research.kfg.builder.cfg.CfgBuilder
 import org.jetbrains.research.kfg.ir.ConcreteClass
 import org.jetbrains.research.kfg.ir.Method
+import org.jetbrains.research.kfg.ir.value.Constant
 import org.jetbrains.research.kfg.ir.value.instruction.UnreachableInst
 import org.jetbrains.research.kfg.util.Flags
 import org.jetbrains.research.kfg.util.JarUtils
@@ -78,6 +85,7 @@ object ClassFileElementResolver {
     class MethodLqtBuilder(val cm: ClassManager, val expression: PsiMethod, val method: Method) {
 
         private data class PsiMethodCallInfo(
+                val type: KexType,
                 val arguments: Map<String, LiquidType>,
                 val thisArgument: LiquidType?,
                 val returnValue: LiquidType?,
@@ -103,36 +111,47 @@ object ClassFileElementResolver {
         )
 
         private fun buildConstructor(arguments: Arguments, predicateState: PredicateState): PsiMethodCallInfo {
-            val newObject = LiquidType.createWithoutExpression(expression, "kexNew",
+            val newObject = LiquidType.createWithoutExpression(expression, "kexNew.${method.`class`.name}",
                     cm.type.getRefType(method.`class`).kexType
             ).apply {
                 addPredicate(PredicateFactory.getNew(variable))
             }
             val argument = TermFactory.getThis(newObject.type)
             val mappings = arguments.mapping + (argument to newObject.variable)
-            val ps = TermRemapper("kexCall${UIDGenerator.id}", mappings).apply(predicateState)
-            return PsiMethodCallInfo(arguments.arguments, null, newObject, ps.simplify())
+            val fields = method.`class`.fields.values.filter { it.defaultValue != null || it.type.isPrimary }
+            val initializers = fields.map {
+                val fieldName = TermFactory.getString(it.name)
+                val fieldTerm = TermFactory.getField(it.type.kexType.makeReference(), newObject.variable, fieldName)
+                val value = TermFactory.getConstant(it.defaultValue.safeAs() ?: it.type.typeDefaultValue())
+                PredicateFactory.getFieldStore(fieldTerm, value)
+            }
+            val initializerState = BasicState(initializers)
+            val bodyState = TermRemapper("kexCall.init.${method.`class`.name}.${UIDGenerator.id}", mappings).apply(predicateState)
+
+            val ps = ChainState(initializerState, bodyState).simplify()
+            return PsiMethodCallInfo(newObject.type, arguments.arguments, null, newObject, ps)
         }
 
         private fun buildStatic(arguments: Arguments, predicateState: PredicateState): PsiMethodCallInfo {
             val returnLqt = if (!method.returnType.isVoid)
-                LiquidType.createWithoutExpression(expression, "kexReturn", method.returnType.kexType)
+                LiquidType.createWithoutExpression(expression, "kexReturn.${method.name}", method.returnType.kexType)
             else null
             val returnTerm = if (!method.returnType.isVoid) TermFactory.getReturn(method) else null
 
             val mappings = arguments.mapping + emptyListIfNull(returnLqt?.let { returnTerm!! to it.variable })
 
-            val ps = TermRemapper("kexCall${UIDGenerator.id}", mappings).apply(predicateState)
-            return PsiMethodCallInfo(arguments.arguments, null, returnLqt, ps.simplify())
+            val ps = TermRemapper("kexCall.${method.name}.${UIDGenerator.id}", mappings).apply(predicateState)
+            val returnType = returnLqt?.type ?: KexVoid
+            return PsiMethodCallInfo(returnType, arguments.arguments, null, returnLqt, ps.simplify())
         }
 
         private fun buildMethod(arguments: Arguments, predicateState: PredicateState): PsiMethodCallInfo {
             val thisType = cm.type.getRefType(method.`class`).kexType
-            val thisLqt = LiquidType.createWithoutExpression(expression, "kexThis", thisType)
+            val thisLqt = LiquidType.createWithoutExpression(expression, "kexThis.${method.`class`.name}", thisType)
             val thisArgument = TermFactory.getThis(thisType)
 
             val returnLqt = if (!method.returnType.isVoid)
-                LiquidType.createWithoutExpression(expression, "kexReturn", method.returnType.kexType)
+                LiquidType.createWithoutExpression(expression, "kexReturn.${method.name}", method.returnType.kexType)
             else null
             val returnTerm = if (!method.returnType.isVoid) TermFactory.getReturn(method) else null
 
@@ -140,8 +159,9 @@ object ClassFileElementResolver {
                     (thisArgument to thisLqt.variable) +
                     emptyListIfNull(returnLqt?.let { returnTerm!! to it.variable })
 
-            val ps = TermRemapper("kexCall${UIDGenerator.id}", mappings).apply(predicateState)
-            return PsiMethodCallInfo(arguments.arguments, thisLqt, returnLqt, ps.simplify())
+            val ps = TermRemapper("kexCall.${method.name}.${UIDGenerator.id}", mappings).apply(predicateState)
+            val returnType = returnLqt?.type ?: KexVoid
+            return PsiMethodCallInfo(returnType, arguments.arguments, thisLqt, returnLqt, ps.simplify())
         }
 
         fun build(): FunctionLiquidType {
@@ -159,7 +179,7 @@ object ClassFileElementResolver {
                     BoolTypeAdapter(cm.type)
             )
 
-            val predicateState = transformers.fold(methodPredicateState) { state, transform -> transform.apply(state) }
+            val predicateState = transformers.apply(methodPredicateState)
 
             val parameterNames = expression.parameters.map { it.name!! }
             val arguments = method.argTypes.zip(parameterNames).mapIndexed { idx, (type, name) ->
@@ -173,10 +193,11 @@ object ClassFileElementResolver {
             }
 
 
+
             val lqt = FunctionLiquidType(
                     expression,
-                    method.returnType.kexType,
-                    LiquidType.createVariable(method.returnType.kexType),
+                    methodInfo.type,
+                    LiquidType.createVariable(methodInfo.type),
                     methodInfo.thisArgument,
                     null,
                     methodInfo.arguments,
@@ -187,10 +208,18 @@ object ClassFileElementResolver {
                     ps += PredicateFactory.getEquality(variable, returnValue.variable)
                 }
                 addPredicate(ps)
+
+                val values = ValueTermCollector.invoke(methodInfo.predicateState).toList()
+                val variableHolder = LiquidType(expression, KexBool, values.combineWithAnd(), mutableListOf()).apply {
+                    addEmptyPredicate()
+                }
+                dependsOn.add(variableHolder)
             }
 
-            return lqt
+            val kotlinLqt = JavaTypeConverter.convertLiquidType(lqt)
+            return kotlinLqt.cast()
         }
+
 
 
         private fun buildArgument(element: PsiElement, index: Int, type: KexType, name: String): Argument {

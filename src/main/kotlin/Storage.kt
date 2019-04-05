@@ -10,13 +10,13 @@ import org.jetbrains.research.kex.state.BasicState
 import org.jetbrains.research.kex.state.ChainState
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.predicate.Predicate
-import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.term.Term
 import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kex.state.term.ValueTerm
 import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.collections.HashMap
+import kotlin.reflect.jvm.isAccessible
 
 
 object UIDGenerator {
@@ -24,7 +24,6 @@ object UIDGenerator {
     val id: Int
         get() = generator.incrementAndGet()
 }
-
 
 class CallExpressionLiquidType(
         expression: PsiElement,
@@ -75,29 +74,33 @@ class ConstantLiquidType(
         expression: PsiElement,
         type: KexType,
         variable: Term
-) : LiquidType(expression, type, variable, arrayListOf()) {
+) : LiquidType(expression, type, variable, mutableListOf()) {
     companion object {
         fun create(expression: PsiElement, type: KotlinType): LiquidType {
             val kexType = type.toKexType()
-            val variable = TermFactory.getValue(kexType, "${UIDGenerator.id}").apply {
-                additionalInfo = ": ${expression.text.replace('\n', ' ')}"
-            }
+            val variable = createVariable(kexType, expression)
             return ConstantLiquidType(type, expression, kexType, variable)
         }
     }
 }
+
+class BlockLiquidType(
+        expression: PsiElement,
+        type: KexType,
+        variable: Term,
+        dependsOn: MutableList<LiquidType>
+) : LiquidType(expression, type, variable, dependsOn)
 
 class ReturnLiquidType(
         expression: PsiElement,
         type: KexType,
         variable: Term,
         dependsOn: MutableList<LiquidType>,
-        val conditionPath: Term,
+        val conditionPath: PredicateState,
         val function: KtCallableDeclaration
 ) : LiquidType(expression, type, variable, dependsOn)
 
 
-//todo: use predicate state
 open class LiquidType(
         val expression: PsiElement,
         val type: KexType,
@@ -129,18 +132,9 @@ open class LiquidType(
         this.predicate = predicate
     }
 
-    open fun getPredicate(): PredicateState = if (predicate != null) predicate!! else BasicState()
+    fun getPredicate(): PredicateState = if (predicate != null) predicate!! else BasicState()
 
-
-    open fun finalConstraint() = predicate?.let { finalConstraint(it) }
-            ?: PredicateFactory.getBool(TermFactory.getTrue())
-
-    private fun finalConstraint(ps: PredicateState) = when {
-        ps.isEmpty -> PredicateFactory.getBool(TermFactory.getTrue())
-        ps is BasicState && ps.size == 1 -> ps.predicates.first()
-        else -> throw IllegalArgumentException("Final constraint is not supported for $ps")
-    }
-
+    fun getRawPredicate() = predicate
 
     fun withVersions() = VersionedLiquidType.makeVersion(this)
 
@@ -169,10 +163,8 @@ open class LiquidType(
         fun create(expression: KtExpression, type: KotlinType) = LiquidType(
                 expression,
                 type.toKexType(),
-                TermFactory.getValue(type.toKexType(), "${UIDGenerator.id}").apply {
-                    additionalInfo = ": ${expression.text.replace('\n', ' ')}"
-                },
-                arrayListOf()
+                createVariable(type.toKexType(), expression),
+                mutableListOf()
         )
 
         fun createWithoutExpression(element: PsiElement, text: String, type: KexType): LiquidType {
@@ -182,14 +174,15 @@ open class LiquidType(
             return LiquidType(
                     expr,
                     type,
-                    TermFactory.getValue(type, "${UIDGenerator.id}").apply {
-                        additionalInfo = ": ${expr.text.replace('\n', ' ')}"
-                    },
-                    arrayListOf()
+                    createVariable(type, expr),
+                    mutableListOf()
             )
         }
 
         fun createVariable(type: KexType) = TermFactory.getValue(type, "${UIDGenerator.id}")
+        fun createVariable(type: KexType, expression: PsiElement) = createVariable(type).apply {
+            debugInfo = ": ${expression.text.replace('\n', ' ').trim().replace(Regex("\\s+"), " ")}"
+        }
 
     }
 
@@ -280,18 +273,10 @@ open class VersionedLiquidType(val lqt: LiquidType, val version: Int, val depend
         return lqt.getPredicate().map(renamer::transform)
     }
 
-
-    fun finalConstraint(): Predicate {
-        val renameMap = collectRenamingMap()
-        val renamer = RenameVariables(renameMap)
-        return renamer.transform(lqt.finalConstraint())
-    }
-
-    private fun collectRenamingMap(): Map<String, Int> {
+    fun collectRenamingMap(): Map<String, Int> {
         val versions = depends.map { it.version }.toSet() + listOf(version)
-        val dependencies = collectTypeDependencies().filter {
-            it.version in versions
-        }
+        val dependencies = dependencies().withVersions(versions)
+
         val depsVars = dependencies
                 .flatMap { vlqt ->
                     vlqt.lqt.variable
@@ -305,33 +290,56 @@ open class VersionedLiquidType(val lqt: LiquidType, val version: Int, val depend
 
     }
 
-    private fun collectTypeDependencies(): List<VersionedLiquidType> {
-        val result = mutableSetOf<VersionedLiquidType>()
-        val toVisit = LinkedList<VersionedLiquidType>()
-        toVisit.add(this)
-        while (toVisit.isNotEmpty()) {
-            val current = toVisit.pop()
-            if (current in result) continue
-            result.add(current)
-            toVisit.addAll(current.depends)
+    sealed class Dependency(val lqt: VersionedLiquidType) {
+        class Cycle(lqt: VersionedLiquidType) : Dependency(lqt)
+        class Normal(lqt: VersionedLiquidType, val depends: List<Dependency>) : Dependency(lqt)
+
+        fun predicateState(): PredicateState = when (this) {
+            is Cycle -> BasicState()
+            is Normal -> {
+                val deps = depends.map { it.predicateState() }.chain().simplify()
+                val myPs = lqt.getPredicate()
+                if (deps.isEmpty) myPs
+                else ChainState(deps, myPs)
+            }
         }
-        return result.toList()
+
+        fun withVersions(versions: Set<Int>): List<VersionedLiquidType> = when (this) {
+            is Cycle -> emptyList()
+            is Normal -> {
+                val deps = depends.flatMap { it.withVersions(versions) }
+                if (lqt.version in versions) deps + listOf(lqt)
+                else deps
+            }
+        }
     }
 
+    private fun dependencies(visited: MutableSet<VersionedLiquidType>): Dependency {
+        if (this in visited) return Dependency.Cycle(this)
+        visited.add(this)
+        val deps = depends.map { it.dependencies(visited) }
+        return Dependency.Normal(this, deps)
+    }
 
-    fun collectPredicates(includeSelf: Boolean): PredicateState =
-            collectTypeDependencies()
-                    .filter { includeSelf || it != this }
-                    .map { it.getPredicate() }
-                    .chain()
+    private fun dependencies() = dependencies(mutableSetOf())
+
+
+    fun collectPredicates(includeSelf: Boolean): PredicateState {
+        val dependency = dependencies()
+        if (includeSelf) return dependency.predicateState()
+        if (dependency is Dependency.Cycle) return BasicState()
+        return dependency.cast<Dependency.Normal>()
+                .depends.map { it.predicateState() }
+                .chain()
+    }
 
 
     companion object {
         fun makeVersion(lqt: LiquidType) = LiquidTypeVersioner().makeVersion(lqt)
         fun create(lqt: LiquidType, version: Int) = when (lqt) {
-            is CallExpressionLiquidType -> VersionedCallLiquidType(lqt, version, arrayListOf())
-            is FunctionLiquidType -> VersionedFunctionLiquidType(lqt, version, arrayListOf())
-            else -> VersionedLiquidType(lqt, version, arrayListOf())
+            is CallExpressionLiquidType -> VersionedCallLiquidType(lqt, version, mutableListOf())
+            is FunctionLiquidType -> VersionedFunctionLiquidType(lqt, version, mutableListOf())
+            else -> VersionedLiquidType(lqt, version, mutableListOf())
         }
     }
 }
@@ -349,9 +357,9 @@ class LiquidTypeVersioner {
                 val versioned = new.cast<VersionedCallLiquidType>()
                 val newVersion = UIDGenerator.id
                 versioned.arguments = lqt.arguments.map { makeVersion(it.value, version) }
+                versioned.internalFunction = makeVersion(lqt.function, newVersion).cast()
                 versioned.dispatchArgument = lqt.dispatchArgument?.let { makeVersion(it, version) }
                 versioned.extensionArgument = lqt.extensionArgument?.let { makeVersion(it, version) }
-                versioned.internalFunction = makeVersion(lqt.function, newVersion).cast()
                 val otherDependencies = lqt.dependsOn
                         .filterNot { it in lqt.allArguments }
                         .filterNot { it == lqt.function }
@@ -363,6 +371,10 @@ class LiquidTypeVersioner {
                 versioned.dispatchArgument = lqt.dispatchArgument?.let { makeVersion(it, version) }
                 versioned.extensionArgument = lqt.extensionArgument?.let { makeVersion(it, version) }
                 versioned.returnValue = lqt.returnValue?.let { makeVersion(it, version) }
+                val otherDependencies = lqt.dependsOn
+                        .filterNot { it in lqt.allArguments }
+                        .filterNot { it == lqt.returnValue }
+                versioned.depends.addAll(otherDependencies.map { makeVersion(it, version) })
             }
             else -> {
                 new.depends.addAll(lqt.dependsOn.map { makeVersion(it, version) })

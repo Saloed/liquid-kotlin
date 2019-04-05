@@ -25,11 +25,13 @@ import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import org.jetbrains.research.kex.config.FileConfig
 import org.jetbrains.research.kex.config.GlobalConfig
 import org.jetbrains.research.kex.config.RuntimeConfig
-import org.jetbrains.research.kex.smt.Result
 import org.jetbrains.research.kex.smt.SMTProxySolver
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
+import org.jetbrains.research.kex.state.transformer.BoolTypeAdapter
+import org.jetbrains.research.kex.state.transformer.Optimizer
 import org.jetbrains.research.kfg.ClassManager
+import org.jetbrains.research.kex.smt.Result
 import java.util.*
 
 object LiquidTypeAnalyzer {
@@ -74,8 +76,10 @@ object LiquidTypeAnalyzer {
         bindingContext = resolutionFacade.analyzeWithAllCompilerChecks(allKtFilesPsi).bindingContext
         val processor = LqtAnnotationProcessor(bindingContext, psiElementFactory, resolutionFacade)
 
-        for (file in allKtFilesPsi) {
+        ClassInfo.psiElementFactory = psiElementFactory
+        ClassInfo.ktTypeContext = allKtFilesPsi.first()
 
+        for (file in allKtFilesPsi) {
 //            if (!file.name.endsWith("xxx.kt")) continue
             if (!file.name.endsWith("testJava.kt")) continue
 //            if (!file.name.endsWith("Test1.kt")) continue
@@ -183,6 +187,14 @@ object LiquidTypeAnalyzer {
 
         val callPredicateState = versioned.getPredicate()
 
+        val transformers = listOf(
+                RemoveVoid,
+                JavaTypeConverter.JavaTypeTransformer,
+                SimplifyPredicates,
+//                ConstantPropagator,
+                Optimizer,
+                BoolTypeAdapter(ClassManager().type)
+        )
 
         val safePropertyLhs = listOf(
                 substitutedArgumentsConstraints,
@@ -190,16 +202,18 @@ object LiquidTypeAnalyzer {
                 callPredicateState
         )
                 .chain()
-                .map(SimplifyPredicates::transform)
-//                .map(ConstantPropagator::transform)
+                .let { transformers.apply(it) }
+                .simplify()
 
         val safePropertyRhs = versioned.function.arguments
                 .map { it.getPredicate() }
                 .chain()
+                .let { transformers.apply(it) }
+                .simplify()
+
 
         return safePropertyLhs to safePropertyRhs
     }
-
 
     private fun analyzeSingleFile(file: KtFile, lqtAnnotations: List<AnnotationInfo>) {
         bindingContext = InitialLiquidTypeInfoCollector.collect(
@@ -214,8 +228,12 @@ object LiquidTypeAnalyzer {
 
 //        viewLiquidTypes("XXX", NewLQTInfo.typeInfo.values)
 
+
         for ((expr, safeProperty) in safeProperties) {
             val (lhs, rhs) = safeProperty
+
+            OptimizeEqualityChains().apply(lhs)
+
             println("[lines ${expr.getLineNumber(true) + 1}:${expr.getLineNumber(false) + 1}]  ${expr.context?.text}")
 
             println("lhs")
@@ -227,13 +245,22 @@ object LiquidTypeAnalyzer {
 //            psToGraphView("TestL", lhs)
 //            psToGraphView("TestR", rhs)
 
+
             try {
                 val result = solver.isViolated(lhs, rhs, negateQuery = true)
                 println("$result ${expr.context?.text}")
-                if (result is Result.SatResult) {
-                    println("${result.model}")
-                } else {
-//                    unsatisfiable.add(key to constraints)
+                when (result) {
+                    is Result.SatResult -> {
+                        println("${result.model}")
+//                        println("FUCK")
+//                        println(PsModelInliner.inline(lhs, result.model))
+                    }
+                    is Result.UnsatResult -> {
+                        println("${result.unsatCore}")
+                    }
+                    is Result.UnknownResult -> {
+                        println(result.reason)
+                    }
                 }
             } catch (ex: Exception) {
                 System.err.println("$ex")

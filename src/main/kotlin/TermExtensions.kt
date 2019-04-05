@@ -1,5 +1,3 @@
-import com.intellij.lang.jvm.types.*
-import com.intellij.psi.PsiTypeParameter
 import com.intellij.psi.tree.IElementType
 import org.jetbrains.kotlin.KtNodeTypes
 import org.jetbrains.kotlin.js.descriptorUtils.getJetTypeFqName
@@ -12,18 +10,19 @@ import org.jetbrains.kotlin.types.typeUtil.isBoolean
 import org.jetbrains.kotlin.types.typeUtil.isChar
 import org.jetbrains.kotlin.types.typeUtil.isInt
 import org.jetbrains.kotlin.types.typeUtil.isTypeParameter
-import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.research.kex.ktype.*
-import org.jetbrains.research.kex.state.BasicState
-import org.jetbrains.research.kex.state.PredicateState
-import org.jetbrains.research.kex.state.predicate.*
-import org.jetbrains.research.kex.state.term.*
-import org.jetbrains.research.kex.state.transformer.Transformer
-import org.jetbrains.research.kfg.ClassManager
+import org.jetbrains.research.kex.state.predicate.PredicateFactory
+import org.jetbrains.research.kex.state.term.IfTerm
+import org.jetbrains.research.kex.state.term.Term
+import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kfg.ir.value.instruction.BinaryOpcode
 import org.jetbrains.research.kfg.ir.value.instruction.CmpOpcode
 import org.jetbrains.research.kfg.ir.value.instruction.UnaryOpcode
-import org.jetbrains.research.kfg.type.*
+import ClassInfo.typeInfo
+import org.jetbrains.research.kex.state.BasicState
+import org.jetbrains.research.kex.state.ChoiceState
+import org.jetbrains.research.kex.state.PredicateState
+import org.jetbrains.research.kex.state.predicate.PredicateType
 
 object TokenMapping {
     val cmpTokenMap = hashMapOf(
@@ -97,13 +96,6 @@ fun TermFactory.fromConstant(type: IElementType, value: String) = when (type) {
     else -> throw IllegalArgumentException("Unknown constant type")
 }
 
-fun TermFactory.fromValue(value: Any?) = when (value) {
-    is Boolean -> getBool(value)
-    is Int -> getInt(value)
-    is String -> getString(value)
-    else -> throw IllegalArgumentException("Unknown value type")
-}
-
 fun isArrayType(type: KotlinType): Boolean {
     val name = type.nameIfStandardType?.identifier ?: return false
     return name.endsWith("Array")
@@ -118,7 +110,14 @@ fun getArrayType(type: KotlinType): KexArray {
     }
 }
 
-fun getClassType(type: SimpleType) = KexClass(type.getJetTypeFqName(false))
+fun getClassType(type: SimpleType): KexClass {
+    val typeName = type.getJetTypeFqName(false).replace('.', '/')
+    val ktName = JavaTypeConverter.javaToKotlin(typeName)
+    val name = ktName ?: typeName
+    return KexClass(name).also {
+        it.typeInfo = type
+    }
+}
 
 fun getTypeParameter(type: SimpleType): KexType {
     val descriptor = TypeUtils.getTypeParameterDescriptorOrNull(type)
@@ -145,44 +144,20 @@ fun KotlinType.toKexType(): KexType = when {
     else -> throw IllegalArgumentException("Unknown type $this")
 }
 
-fun JvmPrimitiveType.toKfgType(): Type = when (kind) {
-    JvmPrimitiveTypeKind.BOOLEAN -> BoolType
-    JvmPrimitiveTypeKind.BYTE -> ByteType
-    JvmPrimitiveTypeKind.CHAR -> CharType
-    JvmPrimitiveTypeKind.DOUBLE -> DoubleType
-    JvmPrimitiveTypeKind.FLOAT -> FloatType
-    JvmPrimitiveTypeKind.INT -> IntType
-    JvmPrimitiveTypeKind.LONG -> LongType
-    JvmPrimitiveTypeKind.SHORT -> ShortType
-    JvmPrimitiveTypeKind.VOID -> VoidType
-    else -> throw IllegalArgumentException("Not possible")
+
+fun PredicateFactory.getIf(cond: Term, thenExpr: Term, elseExpr: Term, result: Term): PredicateState {
+    val trueState = BasicState(listOf(
+            getEquality(cond, TermFactory.getTrue(), PredicateType.Path()),
+            getEquality(result, thenExpr)
+    ))
+
+    val falseState = BasicState(listOf(
+            getEquality(cond, TermFactory.getFalse(), PredicateType.Path()),
+            getEquality(result, elseExpr)
+    ))
+
+    return ChoiceState(listOf(trueState, falseState))
 }
-
-fun JvmType.toKfgType(cm: ClassManager): Type = when (this) {
-    is JvmPrimitiveType -> toKfgType()
-    is JvmArrayType -> ArrayType(componentType.toKfgType(cm))
-    is JvmReferenceType -> resolve()?.let {
-        if (it is PsiTypeParameter) {
-            val bounds = it.bounds
-            if (bounds.isEmpty()) cm.type.getRefType("java/lang/Object")
-            else throw NotImplementedError("Reference type with bounds is not implemented ($bounds)")
-        } else cm.type.getRefType(name)
-    } ?: throw IllegalArgumentException("Unknown JVM Class type")
-    else -> throw NotImplementedError("Convertion from $this to KexType is not implemented")
-}
-
-fun Term.deepToString(): String = "($this [${this.subterms.map { it.deepToString() }}])"
-
-fun Term.treeRepresentation(): String = when (this) {
-    is BinaryTerm -> "$opcode"
-    is CmpTerm -> "$opcode"
-    else -> "${this.javaClass.simpleName} $this"
-}
-
-fun Term.printTermTree(offset: Int = 0): String = "${" ".repeat(offset)} | ${this.treeRepresentation()} \n" + subterms.joinToString("\n") { it.printTermTree(offset + 4) }
-
-fun <T : Transformer<T>> Term.deepAccept(t: Transformer<T>) = t.transform(this).accept(t)
-
 
 fun TermFactory.getIf(cond: Term, thenExpr: Term, elseExpr: Term): Term {
     if (cond.type !is KexBool) throw IllegalArgumentException("If condition must be KexBool but $cond")
@@ -195,27 +170,11 @@ fun UnaryOpcode.Companion.fromOperationToken(token: IElementType) = when (token)
     else -> throw IllegalArgumentException("Not unary operation: $token")
 }
 
-fun Predicate.asTerm() = when (this) {
-    is EqualityPredicate -> TermFactory.getCmp(CmpOpcode.Eq(), lhv, rhv)
-    is InequalityPredicate -> TermFactory.getCmp(CmpOpcode.Neq(), lhv, rhv)
-    is ImplicationPredicate -> TermFactory.implication(lhv, rhv)
-    else -> throw IllegalArgumentException("No conversion from predicate $this of type ${this::class.simpleName} to Term")
-}
-
 fun <T : Term> Term.collectDescendantsOfType(predicate: (Term) -> Boolean): List<T> =
         subterms.flatMap { it.collectDescendantsOfType<T>(predicate) } + if (predicate(this)) listOf(this as T) else emptyList()
 
 
-fun TermFactory.implication(lhs: Term, rhs: Term) = getBinary(KexBool, BinaryOpcode.Implies(), lhs, rhs)
-
-
 fun PredicateFactory.getBool(term: Term) = getEquality(term, TermFactory.getTrue())
-
-fun List<Predicate>.collectToPredicateState(): PredicateState = BasicState(this)
-
-
-fun Term.toPredicateState(): PredicateState = BasicState(listOf(PredicateFactory.getBool(this)))
-fun List<Term>.toPredicateState(): PredicateState = BasicState(this.map { PredicateFactory.getBool(it) })
 
 fun List<Term>.combineWith(combiner: (Term, Term) -> Term) = when (size) {
     0 -> TermFactory.getTrue()//throw IllegalStateException("Empty constraint")
