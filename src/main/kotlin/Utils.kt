@@ -57,8 +57,6 @@ fun <T : Any> KClass<out T>.inspectProperties(receiver: T): Map<KCallable<*>, An
     return (properties + zeroGetters + singleGetters).map { it as Pair<KCallable<*>, Any?> }.toMap()
 }
 
-fun <T> emptyListIfNull(element: T?) = if (element != null) listOf(element) else emptyList()
-
 fun BindingContext.inspectBindingContext(element: PsiElement) =
         BindingContext::class.staticProperties
                 .map { it.get() }

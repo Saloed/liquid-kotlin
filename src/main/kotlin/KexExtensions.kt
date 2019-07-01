@@ -1,10 +1,14 @@
 import com.intellij.lang.jvm.types.*
+import com.intellij.psi.PsiArrayType
+import com.intellij.psi.PsiPrimitiveType
 import com.intellij.psi.PsiTypeParameter
+import com.intellij.psi.impl.source.PsiClassReferenceType
 import org.jetbrains.research.kex.ktype.kexType
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.StateBuilder
 import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kex.state.transformer.Transformer
+import org.jetbrains.research.kex.util.castTo
 import org.jetbrains.research.kfg.ClassManager
 import org.jetbrains.research.kfg.ir.Class
 import org.jetbrains.research.kfg.ir.value.*
@@ -32,7 +36,7 @@ fun Type.typeDefaultValue() = when (this) {
 }
 
 
-fun JvmPrimitiveType.toKfgType(): Type = when (kind) {
+fun JvmPrimitiveType.toKfgType(): Type = when (castTo<PsiPrimitiveType>().kind) {
     JvmPrimitiveTypeKind.BOOLEAN -> BoolType
     JvmPrimitiveTypeKind.BYTE -> ByteType
     JvmPrimitiveTypeKind.CHAR -> CharType
@@ -47,13 +51,13 @@ fun JvmPrimitiveType.toKfgType(): Type = when (kind) {
 
 fun JvmType.toKfgType(cm: ClassManager): Type = when (this) {
     is JvmPrimitiveType -> toKfgType()
-    is JvmArrayType -> ArrayType(componentType.toKfgType(cm))
-    is JvmReferenceType -> resolve()?.let {
+    is JvmArrayType -> ArrayType(this.castTo<PsiArrayType>().componentType.toKfgType(cm))
+    is JvmReferenceType -> castTo<PsiClassReferenceType>().resolve()?.let {
         if (it is PsiTypeParameter) {
             val bounds = it.bounds
             if (bounds.isEmpty()) cm.type.getRefType("java/lang/Object")
             else throw NotImplementedError("Reference type with bounds is not implemented ($bounds)")
-        } else cm.type.getRefType( name)
+        } else cm.type.getRefType(it.name!!)
     } ?: throw IllegalArgumentException("Unknown JVM Class type")
     else -> throw NotImplementedError("Convertion from $this to KexType is not implemented")
 }

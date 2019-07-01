@@ -1,15 +1,13 @@
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiMethod
+import com.intellij.psi.PsiParameter
 import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import org.jetbrains.research.kex.asm.state.PredicateStateAnalysis
 import org.jetbrains.research.kex.asm.state.PredicateStateBuilder
 import org.jetbrains.research.kex.asm.transform.LoopDeroller
-import org.jetbrains.research.kex.config.FileConfig
-import org.jetbrains.research.kex.config.GlobalConfig
-import org.jetbrains.research.kex.config.RuntimeConfig
 import org.jetbrains.research.kex.ktype.*
-import org.jetbrains.research.kex.smt.SMTProxySolver
 import org.jetbrains.research.kex.state.BasicState
 import org.jetbrains.research.kex.state.ChainState
 import org.jetbrains.research.kex.state.PredicateState
@@ -18,14 +16,13 @@ import org.jetbrains.research.kex.state.term.Term
 import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kex.state.transformer.BoolTypeAdapter
 import org.jetbrains.research.kex.state.transformer.ConstantPropagator
-import org.jetbrains.research.kex.state.transformer.VariableCollector
+import org.jetbrains.research.kex.util.castTo
 import org.jetbrains.research.kfg.ClassManager
 import org.jetbrains.research.kfg.Package
 import org.jetbrains.research.kfg.analysis.LoopSimplifier
 import org.jetbrains.research.kfg.builder.cfg.CfgBuilder
 import org.jetbrains.research.kfg.ir.ConcreteClass
 import org.jetbrains.research.kfg.ir.Method
-import org.jetbrains.research.kfg.ir.value.Constant
 import org.jetbrains.research.kfg.ir.value.instruction.UnreachableInst
 import org.jetbrains.research.kfg.util.Flags
 import org.jetbrains.research.kfg.util.JarUtils
@@ -54,12 +51,19 @@ object ClassFileElementResolver {
 
         for (element in elements) {
             if (element in result) continue
+            if(element is PsiClass){
+                val className = element.qualifiedName?.replace('.', '/') ?: continue
+                val concreteClass = cm.getByNameOrNull(className) ?: continue
+                val lqt = LiquidType.createWithoutExpression(element, className, concreteClass.kexType(cm))
+                result[element] = lqt
+                continue
+            }
             if (element !is PsiMethod) continue
             val elementClass = element.containingClass ?: continue
             val className = elementClass.qualifiedName?.replace('.', '/') ?: continue
             val concreteClass = cm.getByNameOrNull(className) ?: continue
 
-            val paramTypes = element.parameters.map { it.type.toKfgType(cm) }
+            val paramTypes = element.parameters.map { it.castTo<PsiParameter>().type.toKfgType(cm) }
             val methodCandidates = concreteClass.methods.values.filter {
                 (element.isConstructor && it.name == "<init>") || it.name == element.name
             }.filter {
@@ -138,7 +142,7 @@ object ClassFileElementResolver {
             else null
             val returnTerm = if (!method.returnType.isVoid) TermFactory.getReturn(method) else null
 
-            val mappings = arguments.mapping + emptyListIfNull(returnLqt?.let { returnTerm!! to it.variable })
+            val mappings = arguments.mapping + listOfNotNull(returnLqt?.let { returnTerm!! to it.variable })
 
             val ps = TermRemapper("kexCall.${method.name}.${UIDGenerator.id}", mappings).apply(predicateState)
             val returnType = returnLqt?.type ?: KexVoid
@@ -157,7 +161,7 @@ object ClassFileElementResolver {
 
             val mappings = arguments.mapping +
                     (thisArgument to thisLqt.variable) +
-                    emptyListIfNull(returnLqt?.let { returnTerm!! to it.variable })
+                    listOfNotNull(returnLqt?.let { returnTerm!! to it.variable })
 
             val ps = TermRemapper("kexCall.${method.name}.${UIDGenerator.id}", mappings).apply(predicateState)
             val returnType = returnLqt?.type ?: KexVoid
@@ -181,7 +185,7 @@ object ClassFileElementResolver {
 
             val predicateState = transformers.apply(methodPredicateState)
 
-            val parameterNames = expression.parameters.map { it.name!! }
+            val parameterNames = expression.parameters.map { it.castTo<PsiParameter>().name!! }
             val arguments = method.argTypes.zip(parameterNames).mapIndexed { idx, (type, name) ->
                 buildArgument(expression, idx, type.kexType, name)
             }.let { Arguments.fromList(it) }

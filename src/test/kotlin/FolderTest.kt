@@ -1,5 +1,4 @@
 import com.intellij.psi.PsiDirectory
-import com.intellij.testFramework.PsiTestUtil
 import com.intellij.testFramework.fixtures.LightCodeInsightFixtureTestCase
 import kotlin.properties.Delegates
 
@@ -20,6 +19,8 @@ open class FolderProjectTest : LightCodeInsightFixtureTestCase() {
         baseDirectoryPsi = myFixture.psiManager.findDirectory(directory)!!
     }
 
-    fun testSimple() = LiquidTypeAnalyzer.analyze(project)
+//    fun testSimple() = LiquidTypeAnalyzer.analyze(project)
+
+    fun testSimpleWithIr() = AnalyzeIr.analyze(project)
 
 }

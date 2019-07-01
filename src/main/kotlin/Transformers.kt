@@ -1,13 +1,7 @@
-import ClassInfo.typeInfo
-import org.jetbrains.kotlin.types.typeUtil.isSubtypeOf
-import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.kotlin.utils.addToStdlib.safeAs
-import org.jetbrains.research.kex.ktype.KexClass
-import org.jetbrains.research.kex.ktype.KexType
 import org.jetbrains.research.kex.ktype.KexVoid
 import org.jetbrains.research.kex.state.PredicateState
-import org.jetbrains.research.kex.state.predicate.EqualityPredicate
-import org.jetbrains.research.kex.state.predicate.Predicate
+import org.jetbrains.research.kex.state.predicate.*
 import org.jetbrains.research.kex.state.term.BinaryTerm
 import org.jetbrains.research.kex.state.term.CmpTerm
 import org.jetbrains.research.kex.state.term.Term
@@ -122,64 +116,45 @@ object ValueTermCollector : Transformer<ValueTermCollector> {
     }
 }
 
-class OptimizeEqualityChains : Transformer<OptimizeEqualityChains> {
-    data class Substitution(val predicate: Predicate, val replace: Term, val with: Term)
+object OptimizeEqualityChains : Transformer<OptimizeEqualityChains> {
 
-    val substitute = mutableListOf<Substitution>()
-    val remove = mutableListOf<Predicate>()
+    class ReplaceTerm(val replace: Term, val with: Term) : Transformer<ReplaceTerm> {
+        override fun transformTerm(term: Term) = if (term == replace) with else super.transformTerm(term)
+    }
+
+    fun inlineSingleValueTerm(ps: PredicateState): PredicateState? {
+        val values = ValueTermCollector(ps)
+        val valueToInline = values.asSequence()
+                .map { it to findUsages(it, ps) }
+                .filter { (_, predicates) -> predicates.size == 2 }
+                .filter { (_, predicates) -> predicates.all {
+                    it is EqualityPredicate|| it is InequalityPredicate || it is ImplicationPredicate
+                } }
+                .filter { (term, predicates) ->
+                    predicates.any {
+                        it is EqualityPredicate && it.type == PredicateType.State() && (it.lhv == term || it.rhv == term)
+                    }
+                }
+                .firstOrNull() ?: return null
+        val usages = valueToInline.second
+        val term = valueToInline.first
+        val inlinePredicate = usages.firstOrNull { it is EqualityPredicate && (it.lhv == term || it.rhv == term) }
+                .safeAs<EqualityPredicate>() ?: return null
+        val substitution = when (term) {
+            inlinePredicate.lhv -> inlinePredicate.rhv
+            inlinePredicate.rhv -> inlinePredicate.lhv
+            else -> return null
+        }
+        val inlineToPredicates = usages.filterNot { it == inlinePredicate }
+        val psWithoutInlinePredicate = ps.filter { it != inlinePredicate }
+        return ReplaceTerm(term, substitution).apply(psWithoutInlinePredicate)
+    }
 
     override fun apply(ps: PredicateState): PredicateState {
-        val values = ValueTermCollector(ps)
-        val usages = values.zipMap { findUsages(it, ps) }
-
-        val usagesToOptimize = usages
-                .filter { (_, predicates) -> predicates.all { it is EqualityPredicate } }
-                .filter { (_, predicates) -> predicates.size == 2 }
-
-        for ((term, termUsages) in usagesToOptimize) {
-            optimize(term, termUsages)
+        var newPs = ps
+        while (true) {
+            newPs = inlineSingleValueTerm(newPs) ?: return newPs.simplify()
         }
-
-        mergeSubstitutions()
-
-        return ps
-    }
-
-    fun optimize(term: Term, usages: List<Predicate>) {
-        val inline = usages.firstOrNull { it is EqualityPredicate && (it.lhv == term || it.rhv == term) }
-                .safeAs<EqualityPredicate>() ?: return
-        val substitution = when (term) {
-            inline.lhv -> inline.rhv
-            inline.rhv -> inline.lhv
-            else -> return
-        }
-        remove.add(inline)
-        usages.filterNot { it == inline }.forEach {
-            substitute.add(Substitution(it, term, substitution))
-        }
-    }
-
-    data class MergeChain(val start: Term, val end: Term)
-
-    fun mergeSubstitutions() {
-        val replaceWith = substitute.groupBy { it.with }
-        val replaceIt = substitute.map { it.replace to it }.toMap()
-        val used = hashSetOf<Substitution>()
-        val chains = mutableListOf<MergeChain>()
-
-        fun visit(substitution: Substitution) {
-            if (substitution in used) return
-            used.add(substitution)
-            if (substitution.replace in replaceWith) {
-                //todo: create merge chain
-            }
-            replaceIt[substitution.with]?.let { visit(it) }
-        }
-
-        for (substitution in substitute) {
-            visit(substitution)
-        }
-
     }
 
     fun findUsages(term: Term, ps: PredicateState): List<Predicate> {

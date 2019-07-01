@@ -32,6 +32,7 @@ import org.jetbrains.research.kex.state.transformer.BoolTypeAdapter
 import org.jetbrains.research.kex.state.transformer.Optimizer
 import org.jetbrains.research.kfg.ClassManager
 import org.jetbrains.research.kex.smt.Result
+import org.jetbrains.research.kex.state.transformer.ConstantPropagator
 import java.util.*
 
 object LiquidTypeAnalyzer {
@@ -69,7 +70,6 @@ object LiquidTypeAnalyzer {
                 .map(psiManager::findFile)
                 .filterIsInstance(KtFile::class.java)
                 .toList()
-
 
         resolutionFacade = KotlinCacheServiceImpl(project).getResolutionFacade(allKtFilesPsi)
 
@@ -127,7 +127,7 @@ object LiquidTypeAnalyzer {
                     .sortedBy {
                         when (it) {
                             is KtFunction -> 0
-                            else -> 100
+                            else -> 1
                         }
                     }
                     .forEach {
@@ -187,33 +187,32 @@ object LiquidTypeAnalyzer {
 
         val callPredicateState = versioned.getPredicate()
 
-        val transformers = listOf(
-                RemoveVoid,
-                JavaTypeConverter.JavaTypeTransformer,
-                SimplifyPredicates,
-//                ConstantPropagator,
-                Optimizer,
-                BoolTypeAdapter(ClassManager().type)
-        )
-
         val safePropertyLhs = listOf(
                 substitutedArgumentsConstraints,
                 parametersConstraints,
                 callPredicateState
         )
                 .chain()
-                .let { transformers.apply(it) }
-                .simplify()
 
         val safePropertyRhs = versioned.function.arguments
                 .map { it.getPredicate() }
                 .chain()
-                .let { transformers.apply(it) }
-                .simplify()
-
 
         return safePropertyLhs to safePropertyRhs
     }
+
+    private fun preparePredicateState(ps: PredicateState) = listOf(
+            RemoveVoid,
+            JavaTypeConverter.JavaTypeTransformer,
+            BoolTypeAdapter(ClassManager().type),
+            SimplifyPredicates,
+            OptimizeEqualityChains,
+                ConstantPropagator,
+            Optimizer
+    ).apply(ps).simplify()
+
+    private fun preparePredicateState(psPair: Pair<PredicateState, PredicateState>) =
+            preparePredicateState(psPair.first) to preparePredicateState(psPair.second)
 
     private fun analyzeSingleFile(file: KtFile, lqtAnnotations: List<AnnotationInfo>) {
         bindingContext = InitialLiquidTypeInfoCollector.collect(
@@ -230,9 +229,7 @@ object LiquidTypeAnalyzer {
 
 
         for ((expr, safeProperty) in safeProperties) {
-            val (lhs, rhs) = safeProperty
-
-            OptimizeEqualityChains().apply(lhs)
+            val (lhs, rhs) = preparePredicateState(safeProperty)
 
             println("[lines ${expr.getLineNumber(true) + 1}:${expr.getLineNumber(false) + 1}]  ${expr.context?.text}")
 
@@ -244,7 +241,6 @@ object LiquidTypeAnalyzer {
 
 //            psToGraphView("TestL", lhs)
 //            psToGraphView("TestR", rhs)
-
 
             try {
                 val result = solver.isViolated(lhs, rhs, negateQuery = true)

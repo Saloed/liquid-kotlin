@@ -46,7 +46,7 @@ class FunctionLiquidType(
         parameters: Map<String, LiquidType>,
         val returnValue: LiquidType?
 ) : FunctionLiquidTypeBase(
-        expression, type, variable, emptyListIfNull(returnValue), dispatchArgument, extensionArgument, parameters
+        expression, type, variable, listOfNotNull(returnValue), dispatchArgument, extensionArgument, parameters
 )
 
 abstract class FunctionLiquidTypeBase(
@@ -60,12 +60,11 @@ abstract class FunctionLiquidTypeBase(
 ) : LiquidType(
         expression, type, variable,
         (additionalDependencies +
-                emptyListIfNull(dispatchArgument) +
-                emptyListIfNull(extensionArgument) +
+                listOfNotNull(dispatchArgument, extensionArgument) +
                 arguments.values
                 ).toMutableList()
 ) {
-    val allArguments = arguments.values + emptyListIfNull(dispatchArgument) + emptyListIfNull(extensionArgument)
+    val allArguments = arguments.values + listOfNotNull(dispatchArgument, extensionArgument)
 }
 
 
@@ -387,9 +386,11 @@ class LiquidTypeVersioner {
 }
 
 
+class NoInfoException(message: String) : IllegalStateException(message)
+
 object NewLQTInfo {
     val typeInfo = HashMap<PsiElement, LiquidType>()
     fun getOrException(element: PsiElement) = typeInfo[element]
-            ?: throw IllegalStateException("Type for $element expected: ${element.text}")
+            ?: throw NoInfoException("Type for $element expected: ${element.text}")
 
 }
