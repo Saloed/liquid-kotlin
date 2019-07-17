@@ -24,3 +24,9 @@ fun foo(a: Int, @LqT("it > 0") b: Int) = doSomething(a, b)
 fun boo(x: Int, y: Int) = foo(x, y)
 
 fun bar(x: Int, y: Int) = foo(x, if (y > 0) y else 1)
+
+fun xxx(x: Int): Int{
+    val a = x
+    val b = a + 17
+    return b
+}

@@ -16,7 +16,6 @@ import org.jetbrains.research.kex.state.term.ValueTerm
 import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.collections.HashMap
-import kotlin.reflect.jvm.isAccessible
 
 
 object UIDGenerator {
@@ -138,8 +137,10 @@ open class LiquidType(
 
     fun withVersions() = VersionedLiquidType.makeVersion(this)
 
+    fun collectDescendants(withSelf: Boolean = false, predicate: (LiquidType) -> Boolean) =
+            collectDescendants(withSelf, predicate) { true }
 
-    fun collectDescendants(withSelf: Boolean = false, predicate: (LiquidType) -> Boolean): List<LiquidType> {
+    fun collectDescendants(withSelf: Boolean = false, predicate: (LiquidType) -> Boolean, needVisit: (LiquidType) -> Boolean): List<LiquidType> {
         val result = arrayListOf<LiquidType>()
         val visited = hashSetOf<LiquidType>()
         val toVisit = LinkedList<LiquidType>()
@@ -154,7 +155,7 @@ open class LiquidType(
             if (current in visited) continue
             visited.add(current)
             if (predicate(current)) result.add(current)
-            toVisit.addAll(current.dependsOn)
+            if (needVisit(current)) toVisit.addAll(current.dependsOn)
         }
         return result
     }

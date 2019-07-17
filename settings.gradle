@@ -13,5 +13,4 @@ pluginManagement {
 }
 rootProject.name = 'LiquidTypes'
 include 'annotation'
-
-
+include 'liquid-fixpoint-parser'

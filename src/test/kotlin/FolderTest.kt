@@ -22,4 +22,6 @@ open class FolderProjectTest : LightCodeInsightFixtureTestCase() {
 
     fun testSimple() = LiquidTypeAnalyzer.analyze(project)
 
+    fun testPenetrateIr() = IRPenetration.penetrate(project)
+
 }

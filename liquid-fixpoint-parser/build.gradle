@@ -1,0 +1,20 @@
+plugins {
+    id 'antlr'
+}
+
+
+
+group 'org.research.jetbrains'
+version '0.0.1'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    antlr "org.antlr:antlr4:4.7.2"
+}
+
+generateGrammarSource {
+    arguments += ['-visitor']
+}

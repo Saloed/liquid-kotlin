@@ -81,9 +81,9 @@ object LiquidTypeAnalyzer {
 
         for (file in allKtFilesPsi) {
 //            if (!file.name.endsWith("xxx.kt")) continue
-            if (!file.name.endsWith("testJava.kt")) continue
+//            if (!file.name.endsWith("testJava.kt")) continue
 //            if (!file.name.endsWith("Test1.kt")) continue
-//            if (!file.name.endsWith("Mian.kt")) continue
+            if (!file.name.endsWith("Mian.kt")) continue
 
             val lqtAnnotations = processor.processLqtAnnotations(file)
 
@@ -223,52 +223,53 @@ object LiquidTypeAnalyzer {
         addLqTAnnotationsInfo(lqtAnnotations)
         cleanupLqTInfo()
         analyzeLqTConstraintsFunLevel()
-        val solver = initializeSolver()
-        val safeProperties = checkFunctionCalls(file)
-
-//        viewLiquidTypes("XXX", NewLQTInfo.typeInfo.values)
-
-
-        for ((expr, safeProperty) in safeProperties) {
-            val (lhs, rhs) = safeProperty
-
-            OptimizeEqualityChains().apply(lhs)
-
-            println("[lines ${expr.getLineNumber(true) + 1}:${expr.getLineNumber(false) + 1}]  ${expr.context?.text}")
-
-            println("lhs")
-            println(lhs)
-
-            println("rhs")
-            println(rhs)
-
-//            psToGraphView("TestL", lhs)
-//            psToGraphView("TestR", rhs)
-
-
-            try {
-                val result = solver.isViolated(lhs, rhs, negateQuery = true)
-                println("$result ${expr.context?.text}")
-                when (result) {
-                    is Result.SatResult -> {
-                        println("${result.model}")
-//                        println("FUCK")
-//                        println(PsModelInliner.inline(lhs, result.model))
-                    }
-                    is Result.UnsatResult -> {
-                        println("${result.unsatCore}")
-                    }
-                    is Result.UnknownResult -> {
-                        println(result.reason)
-                    }
-                }
-            } catch (ex: Exception) {
-                System.err.println("$ex")
-                System.err.println("${ex.stackTrace.map { "$it \n" }}")
-                System.err.println(expr.text)
-                System.err.println("$safeProperty")
-            }
-            println("-".repeat(100))
-        }
+        FixpointAnalyzer.analyze(NewLQTInfo.typeInfo)
+//        val solver = initializeSolver()
+//        val safeProperties = checkFunctionCalls(file)
+//
+////        viewLiquidTypes("XXX", NewLQTInfo.typeInfo.values)
+//
+//
+//        for ((expr, safeProperty) in safeProperties) {
+//            val (lhs, rhs) = safeProperty
+//
+//            OptimizeEqualityChains().apply(lhs)
+//
+//            println("[lines ${expr.getLineNumber(true) + 1}:${expr.getLineNumber(false) + 1}]  ${expr.context?.text}")
+//
+//            println("lhs")
+//            println(lhs)
+//
+//            println("rhs")
+//            println(rhs)
+//
+////            psToGraphView("TestL", lhs)
+////            psToGraphView("TestR", rhs)
+//
+//
+//            try {
+//                val result = solver.isViolated(lhs, rhs, negateQuery = true)
+//                println("$result ${expr.context?.text}")
+//                when (result) {
+//                    is Result.SatResult -> {
+//                        println("${result.model}")
+////                        println("FUCK")
+////                        println(PsModelInliner.inline(lhs, result.model))
+//                    }
+//                    is Result.UnsatResult -> {
+//                        println("${result.unsatCore}")
+//                    }
+//                    is Result.UnknownResult -> {
+//                        println(result.reason)
+//                    }
+//                }
+//            } catch (ex: Exception) {
+//                System.err.println("$ex")
+//                System.err.println("${ex.stackTrace.map { "$it \n" }}")
+//                System.err.println(expr.text)
+//                System.err.println("$safeProperty")
+//            }
+//            println("-".repeat(100))
+//        }
     }
 }
