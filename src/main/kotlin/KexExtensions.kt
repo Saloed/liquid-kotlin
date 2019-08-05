@@ -3,13 +3,11 @@ import com.intellij.psi.PsiTypeParameter
 import org.jetbrains.research.kex.ktype.kexType
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.StateBuilder
-import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kex.state.transformer.Transformer
 import org.jetbrains.research.kfg.ClassManager
 import org.jetbrains.research.kfg.ir.Class
 import org.jetbrains.research.kfg.ir.value.*
 import org.jetbrains.research.kfg.type.*
-import java.lang.IllegalStateException
 
 fun Class.kexType(cm: ClassManager) = cm.type.getRefType(this).kexType
 

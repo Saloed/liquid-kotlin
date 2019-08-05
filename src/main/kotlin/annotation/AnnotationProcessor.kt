@@ -1,4 +1,7 @@
+package annotation
+
 import com.intellij.openapi.command.WriteCommandAction
+import findPsiWithProxy
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
 import org.jetbrains.kotlin.name.FqName
@@ -7,11 +10,18 @@ import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.allChildren
 import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
 import org.jetbrains.kotlin.resolve.BindingContext
-import org.jetbrains.liquidtype.LqT
+import org.jetbrains.research.liquidtype.LqT
+import pairNotNull
+import zipMap
 
 val annotationFqName = FqName.fromSegments(LqT::class.qualifiedName!!.split("."))
 
-data class AnnotationInfo(val declaration: KtDeclaration, val expression: KtExpression, val bindingContext: BindingContext) {
+data class AnnotationInfo(
+        val declaration: KtDeclaration,
+        val expression: KtExpression,
+        val bindingContext: BindingContext,
+        val fragment: KtFile
+) {
     override fun hashCode() = declaration.hashCode()
     override fun equals(other: Any?) = this === other || other is AnnotationInfo && declaration == other.declaration
 }
@@ -41,7 +51,8 @@ class LqtAnnotationProcessor(
         if (outerSpace !is FunctionDescriptor)
             throw NotImplementedError("Annotations support implemented only for function arguments")
 
-        val funPsi = outerSpace.findPsiWithProxy() ?: throw IllegalStateException("PSI for declaration context not found")
+        val funPsi = outerSpace.findPsiWithProxy()
+                ?: throw IllegalStateException("PSI for declaration context not found")
 
         val newExprFragment = psiElementFactory.createExpressionCodeFragment(constraint, funPsi)
         WriteCommandAction.runWriteCommandAction(newExprFragment.project) {
@@ -63,7 +74,7 @@ class LqtAnnotationProcessor(
 
 
 
-        return AnnotationInfo(declaration, newExpr, newExprBindingContext)
+        return AnnotationInfo(declaration, newExpr, newExprBindingContext, newExprFragment)
     }
 
     fun processLqtAnnotations(file: KtFile) =

@@ -1,25 +1,32 @@
-import com.intellij.find.FindManager
-import com.intellij.find.findUsages.FindUsagesManager
-import com.intellij.find.findUsages.FindUsagesOptions
-import com.intellij.find.impl.FindManagerImpl
+import analysis.DummyVisitor
+import annotation.AnnotationInfo
+import annotation.AnnotationProcessorWithPsiModification
+import annotation.ElementConstraint
+import annotation.RemoveAnnotationsFromIrTransformer
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.newvfs.impl.VirtualFileImpl
-import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiManager
+import org.jetbrains.kotlin.backend.common.ir.createParameterDeclarations
+import org.jetbrains.kotlin.backend.jvm.JvmGeneratorExtensions
 import org.jetbrains.kotlin.config.*
 import org.jetbrains.kotlin.idea.caches.resolve.KotlinCacheServiceImpl
-import org.jetbrains.kotlin.idea.findUsages.KotlinFunctionFindUsagesOptions
-import org.jetbrains.kotlin.idea.findUsages.KotlinPropertyFindUsagesOptions
 import org.jetbrains.kotlin.idea.internal.KotlinBytecodeToolWindow
 import org.jetbrains.kotlin.idea.project.languageVersionSettings
-import org.jetbrains.kotlin.idea.refactoring.getLineNumber
-import org.jetbrains.kotlin.idea.resolve.ResolutionFacade
+import org.jetbrains.kotlin.ir.IrElement
+import org.jetbrains.kotlin.ir.builders.declarations.buildClass
+import org.jetbrains.kotlin.ir.declarations.IrClass
+import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
+import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
+import org.jetbrains.kotlin.ir.util.dump
+import org.jetbrains.kotlin.load.kotlin.JvmPackagePartSource
 import org.jetbrains.kotlin.load.kotlin.VirtualFileFinder
 import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
+import org.jetbrains.kotlin.psi2ir.Psi2IrTranslatorProxy
 import org.jetbrains.kotlin.resolve.BindingContext
+import org.jetbrains.kotlin.serialization.deserialization.descriptors.DeserializedContainerSource
 import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import org.jetbrains.research.kex.config.FileConfig
@@ -31,68 +38,119 @@ import org.jetbrains.research.kex.state.predicate.PredicateFactory
 import org.jetbrains.research.kex.state.transformer.BoolTypeAdapter
 import org.jetbrains.research.kex.state.transformer.Optimizer
 import org.jetbrains.research.kfg.ClassManager
-import org.jetbrains.research.kex.smt.Result
 import java.util.*
 
 object LiquidTypeAnalyzer {
 
-    private lateinit var findUsagesManager: FindUsagesManager
     private lateinit var ideFileFinder: VirtualFileFinder
-
     private lateinit var psiElementFactory: KtPsiFactory
-    private lateinit var psiDocumentManager: PsiDocumentManager
-    private lateinit var resolutionFacade: ResolutionFacade
-
-    private lateinit var findFunctionUsagesOptions: FindUsagesOptions
-    private lateinit var findPropertyUsagesOptions: FindUsagesOptions
 
     lateinit var bindingContext: BindingContext
 
-    @JvmStatic
-    fun analyze(project: Project) {
 
-        val projectRootManager = ProjectRootManager.getInstance(project)
-        val psiManager = PsiManager.getInstance(project)
-
-        psiDocumentManager = PsiDocumentManager.getInstance(project)
-        psiElementFactory = KtPsiFactory(project)
-        ideFileFinder = VirtualFileFinder.getInstance(project)
-
-        findUsagesManager = (FindManager.getInstance(project) as FindManagerImpl).findUsagesManager
-        findPropertyUsagesOptions = KotlinPropertyFindUsagesOptions(project)
-        findFunctionUsagesOptions = KotlinFunctionFindUsagesOptions(project)
-
+    private fun ProjectRootManager.collectFiles(): List<VirtualFile> {
         val projectFilesAndDirectories = ArrayList<VirtualFile>()
-        projectRootManager.fileIndex.iterateContent { projectFilesAndDirectories.add(it) }
-        val allKtFilesPsi = projectFilesAndDirectories.asSequence()
+        fileIndex.iterateContent { projectFilesAndDirectories.add(it) }
+        return projectFilesAndDirectories
+    }
+
+
+    fun getFilesToAnalyze(project: Project): List<KtFile> {
+        val psiManager = PsiManager.getInstance(project)
+        return ProjectRootManager.getInstance(project)
+                .collectFiles()
+                .asSequence()
                 .filterIsInstance(VirtualFileImpl::class.java)
                 .map(psiManager::findFile)
                 .filterIsInstance(KtFile::class.java)
                 .toList()
+                .filter { it.name == "Mian.kt" }
+    }
 
 
-        resolutionFacade = KotlinCacheServiceImpl(project).getResolutionFacade(allKtFilesPsi)
+    fun applyLqtAnnotations(project: Project, files: List<KtFile>) = files.map {
+        AnnotationProcessorWithPsiModification.process(project, it)
+    }
 
-        bindingContext = resolutionFacade.analyzeWithAllCompilerChecks(allKtFilesPsi).bindingContext
-        val processor = LqtAnnotationProcessor(bindingContext, psiElementFactory, resolutionFacade)
 
-        ClassInfo.psiElementFactory = psiElementFactory
-        ClassInfo.ktTypeContext = allKtFilesPsi.first()
+    fun buildIr(project: Project, files: List<KtFile>): IrModuleFragment {
+        val analysisResult = KotlinCacheServiceImpl(project)
+                .getResolutionFacade(files)
+                .analyzeWithAllCompilerChecks(files)
+        analysisResult.throwIfError()
 
-        for (file in allKtFilesPsi) {
-//            if (!file.name.endsWith("xxx.kt")) continue
-//            if (!file.name.endsWith("testJava.kt")) continue
-//            if (!file.name.endsWith("Test1.kt")) continue
-            if (!file.name.endsWith("Mian.kt")) continue
+        val languageVersionSettings = files.first().languageVersionSettings
+        val psi2ir = Psi2IrTranslatorProxy.create(languageVersionSettings, ::facadeClassGenerator)
+        val psi2irContext = psi2ir.createGeneratorContext(
+                analysisResult.moduleDescriptor,
+                analysisResult.bindingContext,
+                extensions = JvmGeneratorExtensions
+        )
+        return psi2ir.generateModuleFragment(psi2irContext, files)
+    }
 
-            val lqtAnnotations = processor.processLqtAnnotations(file)
-
-            bindingContext = lqtAnnotations.map { it.bindingContext }.fold(bindingContext) { acc, bindingContext ->
-                acc.mergeWith(bindingContext)
-            }
-            analyzeSingleFile(file, lqtAnnotations)
+    private fun facadeClassGenerator(source: DeserializedContainerSource): IrClass? {
+        val jvmPackagePartSource = source.safeAs<JvmPackagePartSource>() ?: return null
+        val facadeName = jvmPackagePartSource.facadeClassName ?: jvmPackagePartSource.className
+        return buildClass {
+            origin = IrDeclarationOrigin.FILE_CLASS
+            name = facadeName.fqNameForTopLevelClassMaybeWithDollars.shortName()
+        }.also {
+            it.createParameterDeclarations()
         }
     }
+
+
+    private fun extractConstraintsFromIr(ir: IrModuleFragment): Pair<ElementConstraint, IrModuleFragment>{
+        val transformer = RemoveAnnotationsFromIrTransformer()
+        val resultIr = ir.transform(transformer, null) as IrModuleFragment
+        val constraints = transformer.constraints
+        return constraints to resultIr
+    }
+
+
+    @JvmStatic
+    fun analyze(project: Project) {
+        val files = getFilesToAnalyze(project).also {
+            applyLqtAnnotations(project, it)
+        }
+        val irModuleFragment = buildIr(project, files)
+        val (constraints, ir) = extractConstraintsFromIr(irModuleFragment)
+
+
+        println(ir.dump())
+
+        println("$constraints")
+
+
+        val dummy = DummyVisitor(constraints)
+        ir.accept(dummy, null)
+
+
+//        DummyVisitor().visit(irModuleFragment)
+
+        return
+
+
+//        ClassInfo.psiElementFactory = psiElementFactory
+//        ClassInfo.ktTypeContext = allKtFilesPsi.first()
+
+
+//        for (file in allKtFilesPsi) {
+////            if (!file.name.endsWith("xxx.kt")) continue
+////            if (!file.name.endsWith("testJava.kt")) continue
+////            if (!file.name.endsWith("Test1.kt")) continue
+//            if (!file.name.endsWith("Mian.kt")) continue
+//
+//
+//
+//            bindingContext = lqtAnnotations.map { it.bindingContext }.fold(bindingContext) { acc, bindingContext ->
+//                acc.mergeWith(bindingContext)
+//            }
+//            analyzeSingleFile(file, lqtAnnotations)
+//        }
+    }
+
 
     fun getKtFileBytecode(file: KtFile): List<ByteArray>? {
         val configuration = CompilerConfiguration()

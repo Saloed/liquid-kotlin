@@ -1,4 +1,4 @@
-import org.jetbrains.liquidtype.LqT
+import org.jetbrains.research.liquidtype.LqT
 
 fun doSomething(x0: Int, x1: Int) = 0
 fun doSomethingElse(x0: Int, x1: Int) = 0

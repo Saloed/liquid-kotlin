@@ -21,6 +21,13 @@ object Solver {
         it.mkdirs()
     }
 
+    init {
+        workDir.walkTopDown()
+                .filterNot { it == workDir }
+                .filter { it.exists() }
+                .forEach { it.deleteRecursively() }
+    }
+
     private val solutionsDir = File(workDir, ".liquid")
 
     private fun getMaxQueryId(): Int {

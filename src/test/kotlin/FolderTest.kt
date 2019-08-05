@@ -1,10 +1,9 @@
 import com.intellij.psi.PsiDirectory
-import com.intellij.testFramework.PsiTestUtil
-import com.intellij.testFramework.fixtures.LightCodeInsightFixtureTestCase
+import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase
 import kotlin.properties.Delegates
 
 
-open class FolderProjectTest : LightCodeInsightFixtureTestCase() {
+open class FolderProjectTest : LightJavaCodeInsightFixtureTestCase() {
 
     val testFolder = "testData/"
 

@@ -1,0 +1,3 @@
+package analysis
+
+class SomeDummyAnalysisResult

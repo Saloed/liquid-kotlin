@@ -1,5 +1,5 @@
 import java.util.ArrayList
-import org.jetbrains.liquidtype.LqT
+import org.jetbrains.research.liquidtype.LqT
 
 //val top = 1
 
@@ -12,6 +12,13 @@ object TestJava {
 //        val out = outer
 //        val p = param
 //    }
+
+    fun huy(){
+        var x = 1
+        x = x + 1
+        x += 2
+        val y = x
+    }
 
     fun foo(): Boolean {
         val x = ArrayList<Int>()

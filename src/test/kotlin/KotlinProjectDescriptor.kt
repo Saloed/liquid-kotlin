@@ -55,30 +55,6 @@ open class KotlinJdkAndLibraryProjectDescriptor(private val libraryFiles: List<F
 
 open class KotlinWithJdkAndRuntimeLightProjectDescriptor : KotlinJdkAndLibraryProjectDescriptor {
     protected constructor() : super(TestJarUtil.runtimeJarForTests)
-
-    constructor(libraryFiles: List<File>) : super(libraryFiles)
-
-    companion object {
-
-        val INSTANCE = KotlinWithJdkAndRuntimeLightProjectDescriptor()
-
-        val INSTANCE_WITH_KOTLIN_TEST = KotlinWithJdkAndRuntimeLightProjectDescriptor(
-                listOf(TestJarUtil.runtimeJarForTests, TestJarUtil.kotlinTestJar)
-        )
-
-        val INSTANCE_WITH_SCRIPT_RUNTIME = KotlinWithJdkAndRuntimeLightProjectDescriptor(
-                listOf(TestJarUtil.runtimeJarForTests, TestJarUtil.runtimeJarForKotlinScript)
-        )
-
-        val INSTANCE_WITH_REFLECT = KotlinWithJdkAndRuntimeLightProjectDescriptor(
-                listOf(TestJarUtil.runtimeJarForTests, TestJarUtil.reflectJarForTests)
-        )
-
-        val INSTANCE_FULL_JDK: KotlinWithJdkAndRuntimeLightProjectDescriptor = object : KotlinWithJdkAndRuntimeLightProjectDescriptor() {
-            override fun getSdk() = TestJarUtil.fullJdk()
-        }
-
-    }
 }
 
 

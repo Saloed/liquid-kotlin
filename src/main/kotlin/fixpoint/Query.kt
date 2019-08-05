@@ -2,6 +2,7 @@ package fixpoint
 
 import fixpoint.predicate.Term
 
+interface QueryElement: Printable
 
 sealed class Type : Printable {
     data class NamedType(val name: String) : Type() {
@@ -21,7 +22,7 @@ sealed class Type : Printable {
     }
 }
 
-data class Predicate(val name: String, val type: Type, val constraint: List<Term>) : Printable {
+data class Predicate(val name: String, val type: Type, val constraint: List<Term>) : QueryElement {
     override fun print() = "{$name : ${type.print()} | [${constraint.joinToString("; ") { it.print() }}]}"
 }
 
@@ -29,23 +30,23 @@ data class QualifierArgument(val name: String, val type: Type) : Printable {
     override fun print() = "$name : ${type.print()}"
 }
 
-data class Qualifier(val name: String, val arguments: List<QualifierArgument>, val term: Term) : Printable {
+data class Qualifier(val name: String, val arguments: List<QualifierArgument>, val term: Term) : QueryElement {
     override fun print() = "qualif $name (${arguments.joinToString(", ") { it.print() }}) : ((${term.print()}))"
 }
 
-data class Constant(val name: String, val type: Type) : Printable {
+data class Constant(val name: String, val type: Type) : QueryElement {
     override fun print() = "constant $name : (${type.print()})"
 }
 
-data class Bind(val id: Int, val name: String, val predicate: Predicate) : Printable {
+data class Bind(val id: Int, val name: String, val predicate: Predicate) : QueryElement {
     override fun print() = "bind $id $name : ${predicate.print()}"
 }
 
-data class Environment(val ids: List<Int>) : Printable {
+data class Environment(val ids: List<Int>) : QueryElement {
     override fun print() = "env [${ids.joinToString("; ") { "$it" }}]"
 }
 
-data class Constraint(val env: Environment, val lhs: Predicate, val rhs: Predicate, val id: Int) : Printable {
+data class Constraint(val env: Environment, val lhs: Predicate, val rhs: Predicate, val id: Int) : QueryElement {
     override fun print() = """
     constraint:    
         ${env.print()}
@@ -55,7 +56,7 @@ data class Constraint(val env: Environment, val lhs: Predicate, val rhs: Predica
     """.trimIndent()
 }
 
-data class WFConstraint(val env: Environment, val reft: Predicate, val id: Int) : Printable {
+data class WFConstraint(val env: Environment, val reft: Predicate, val id: Int) : QueryElement {
     override fun print() = """
     wf:    
         ${env.print()}

@@ -1,3 +1,4 @@
+import annotation.AnnotationInfo
 import com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.cfg.pseudocode.Pseudocode
 import org.jetbrains.kotlin.cfg.pseudocode.PseudocodeUtil

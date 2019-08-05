@@ -1,4 +1,4 @@
-package org.jetbrains.liquidtype
+package org.jetbrains.research.liquidtype
 
 import org.intellij.lang.annotations.Language
 
@@ -6,3 +6,6 @@ import org.intellij.lang.annotations.Language
 @Retention(AnnotationRetention.RUNTIME)
 //public annotation class LqT(@Language("kotlin", prefix = "fun condition() = ") val condition: String = "true")
 public annotation class LqT(@Language("kotlin", prefix = "fun condition(): Boolean = ") val condition: String)
+
+public inline fun <reified T> evaluateCondition(argument: T, condition: (T) -> Boolean): Boolean = condition(argument)
+

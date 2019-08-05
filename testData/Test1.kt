@@ -1,4 +1,4 @@
-import org.jetbrains.liquidtype.LqT
+import org.jetbrains.research.liquidtype.LqT
 
 open class Vector(val elements: List<Int>)
 data class Point(val x: Int, @LqT("it > 0") val y: Int) : Vector(listOf(x, y))

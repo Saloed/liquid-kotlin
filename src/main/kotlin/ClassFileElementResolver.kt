@@ -1,5 +1,7 @@
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiMethod
+
+import org.jetbrains.kotlin.j2k.getContainingMethod
 import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import org.jetbrains.research.kex.asm.state.PredicateStateAnalysis
@@ -35,8 +37,6 @@ import java.util.jar.JarFile
 
 object ClassFileElementResolver {
     fun resolve(elements: List<PsiElement>): Map<PsiElement, LiquidType> {
-
-
         val jarClasses = elements
                 .asSequence()
                 .mapNotNull { it.containingFile }
@@ -51,6 +51,7 @@ object ClassFileElementResolver {
         val cm = ClassManager(jarClasses, Package("*"))
 
         val result = hashMapOf<PsiElement, LiquidType>()
+
 
         for (element in elements) {
             if (element in result) continue
@@ -193,7 +194,6 @@ object ClassFileElementResolver {
             }
 
 
-
             val lqt = FunctionLiquidType(
                     expression,
                     methodInfo.type,
@@ -219,7 +219,6 @@ object ClassFileElementResolver {
             val kotlinLqt = JavaTypeConverter.convertLiquidType(lqt)
             return kotlinLqt.cast()
         }
-
 
 
         private fun buildArgument(element: PsiElement, index: Int, type: KexType, name: String): Argument {
