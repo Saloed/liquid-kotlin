@@ -1,6 +1,5 @@
 package analysis
 
-import fixpoint.Environment
 import fixpoint.predicate.*
 import mapSecond
 import org.jetbrains.kotlin.descriptors.ValueParameterDescriptor
@@ -95,7 +94,7 @@ class ExpressionAnalyzer(val context: AnalysisContext) : IrElementVisitor<Term, 
             val result = getBuiltinFunctionResult(arguments, descriptor)
             val resultName = context.generateUniqueName()
             val resultVar = context.createVariable(resultName, expression.type)
-            val resultTerm =  context.createEquality(resultVar, result)
+            val resultTerm = context.createEquality(resultVar, result)
             context.binds[expression] = context.createBind(resultName, expression.type, resultTerm)
             return resultVar
         }
@@ -139,7 +138,7 @@ class ExpressionAnalyzer(val context: AnalysisContext) : IrElementVisitor<Term, 
 
         fun createBranch(condition: List<Term>, value: Term, condExpr: IrExpression?, valueExpr: IrExpression) {
             //todo: take only usefull binds
-            val environment = Environment(context.binds.values.map { it.id })
+            val environment = context.createEnvironmentForBinds(context.binds.values.toList(), except = listOf(resultBind))
             val branchValueName = "branch_value"
             val branchValueTerm = context.createVariable(branchValueName, valueExpr.type)
             val lhsTerm = context.createEquality(branchValueTerm, value)
@@ -155,10 +154,21 @@ class ExpressionAnalyzer(val context: AnalysisContext) : IrElementVisitor<Term, 
             createBranch(listOf(condition), value, condExpr, valueExpr)
         }
 
-        if (elseBranches.isEmpty()) return resultVar
-        val elseBranch = elseBranches.first()
-        val elseValue = elseBranch.result.accept(this, null)
-        createBranch(elseCondition, elseValue, null, elseBranch.result)
+        if (elseBranches.isNotEmpty()) {
+            val elseBranch = elseBranches.first()
+            val elseValue = elseBranch.result.accept(this, null)
+            createBranch(elseCondition, elseValue, null, elseBranch.result)
+        }
+
+        run {
+            //todo: take only usefull binds
+            val environment = context.createEnvironmentForBinds(context.binds.values.toList())
+            val substitutionTerm = SubstitutionTerm(resultName, emptyList())
+            val reft = context.createPredicate("it", expression.type, listOf(substitutionTerm))
+            val wf = context.createWf(environment, reft)
+            context.wfConstraints.add(wf)
+        }
+
         return resultVar
     }
 

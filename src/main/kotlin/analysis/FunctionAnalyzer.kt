@@ -13,17 +13,38 @@ import org.jetbrains.kotlin.ir.types.isInt
 import org.jetbrains.kotlin.ir.types.isString
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 
-class DummyVisitor(val constraints: ElementConstraint) : IrElementVisitorVoid {
+class FunctionAnalyzer(val constraints: ElementConstraint) {
 
 
-    override fun visitElement(element: IrElement) {
-        element.acceptChildren(this, null)
+    class FunctionCollector : IrElementVisitorVoid {
+
+        val functions = mutableListOf<IrSimpleFunction>()
+
+        override fun visitElement(element: IrElement) {
+            element.acceptChildren(this, null)
+        }
+
+
+        override fun visitSimpleFunction(declaration: IrSimpleFunction) {
+            functions.add(declaration)
+            super.visitFunction(declaration)
+        }
+
+        companion object {
+            fun collect(element: IrElement): List<IrSimpleFunction> {
+                val collector = FunctionCollector()
+                element.accept(collector, null)
+                return collector.functions
+            }
+        }
+
     }
 
-
-    override fun visitSimpleFunction(declaration: IrSimpleFunction) {
-        analyzeFunction(declaration)
-        super.visitFunction(declaration)
+    fun analyze(element: IrElement) {
+        val functions = FunctionCollector.collect(element)
+        for (function in functions) {
+            analyzeFunction(function)
+        }
     }
 
 
@@ -59,38 +80,61 @@ class DummyVisitor(val constraints: ElementConstraint) : IrElementVisitorVoid {
         }
         val returnValue = VariableTerm("return_value")
         val returnTerm = VariableTerm("return")
+        val returnResultVar = VariableTerm("return_result_var")
         val returnName = "return_value_fn"
-        for ((key, bind) in context.binds) {
-            if (bind.name != returnValue.name) continue
-            val assigmentTerm = AssigmentTerm(returnTerm, returnValue)
+
+        val returnBind = run {
+            val assigmentTerm = AssigmentTerm(returnTerm, returnResultVar)
             val substitutionTerm = SubstitutionTerm(returnName, listOf(assigmentTerm))
-            val predicateConstraint = bind.predicate.constraint
-            val predicate = bind.predicate.copy(constraint = predicateConstraint + substitutionTerm)
-            val newBind = bind.copy(predicate = predicate)
-            context.binds[key] = newBind
+            context.createBind(returnResultVar.name, function.returnType, listOf(substitutionTerm))
+        }
+        context.binds[function] = returnBind
+
+        run {
+            // todo: make environment not full
+            val environment = context.createEnvironmentForBinds(context.binds.values.toList(), except = listOf(returnBind))
+            val itTerm = VariableTerm("it")
+            val lhs = run {
+                val term = context.createEquality(itTerm, returnValue)
+                context.createPredicate("it", function.returnType, listOf(term))
+            }
+            val rhs = run {
+                val assigmentTerm = AssigmentTerm(returnTerm, itTerm)
+                val substitutionTerm = SubstitutionTerm(returnName, listOf(assigmentTerm))
+                context.createPredicate("it", function.returnType, listOf(substitutionTerm))
+            }
+            val constraint = context.createConstraint(environment, lhs, rhs)
+            context.constraints.add(constraint)
         }
 
-        // todo: make environment not full
-        val environment = Environment(context.binds.values.map { it.id })
+        run {
+            // todo: make environment not full
+            val environment = context.createEnvironmentForBinds(context.binds.values.toList())
 
-        val itTerm = VariableTerm("it")
-        val lhs = run {
-            val assigmentTerm = AssigmentTerm(returnTerm, itTerm)
-            val substitutionTerm = SubstitutionTerm(returnName, listOf(assigmentTerm))
-            context.createPredicate("it", function.returnType, listOf(substitutionTerm))
+            val itTerm = VariableTerm("it")
+            val lhs = run {
+                val assigmentTerm = AssigmentTerm(returnTerm, itTerm)
+                val substitutionTerm = SubstitutionTerm(returnName, listOf(assigmentTerm))
+                context.createPredicate("it", function.returnType, listOf(substitutionTerm))
+            }
+            val rhs = run {
+                val term = context.createEquality(itTerm, dummyValue)
+                context.createPredicate("it", function.returnType, listOf(term))
+            }
+
+            val constraint = context.createConstraint(environment, lhs, rhs)
+            context.constraints.add(constraint)
+
         }
-        val rhs = run {
-            val term = context.createEquality(itTerm, dummyValue)
-            context.createPredicate("it", function.returnType, listOf(term))
+
+        run {
+            // todo: make environment not full
+            val environment = context.createEnvironmentForBinds(context.binds.values.toList())
+            val reftSubstitution = SubstitutionTerm(returnName, emptyList())
+            val reft = context.createPredicate("return", function.returnType, listOf(reftSubstitution))
+            val wf = context.createWf(environment, reft)
+            context.wfConstraints.add(wf)
         }
-
-        val constraint = context.createConstraint(environment, lhs, rhs)
-        context.constraints.add(constraint)
-
-        val reftSubstitution = SubstitutionTerm(returnName, emptyList())
-        val reft = context.createPredicate("return", function.returnType, listOf(reftSubstitution))
-        val wf = context.createWf(environment, reft)
-        context.wfConstraints.add(wf)
     }
 
     fun analyzeFunction(function: IrSimpleFunction): SomeDummyAnalysisResult {
@@ -115,27 +159,33 @@ class DummyVisitor(val constraints: ElementConstraint) : IrElementVisitorVoid {
 
         val query = buildQueryForContext(context)
 
-        println(query.print())
-
         val solution = Solver.solve(query)
 
-        solution.forEach {
-            println(it.print())
-        }
+        showDebugInfo(function, query, solution)
 
         return SomeDummyAnalysisResult()
     }
 
 
-    fun simplifyBinds(context: AnalysisContext) = with(context){
-        for((key, bind) in binds){
+    private fun showDebugInfo(function: IrSimpleFunction, query: Query, solutions: List<Solution>) {
+
+        println(function.name)
+        println(query.print())
+        solutions.forEach {
+            println(it.print())
+        }
+
+    }
+
+    fun simplifyBinds(context: AnalysisContext) = with(context) {
+        for ((key, bind) in binds) {
             val constraints = bind.predicate.constraint
-            if(constraints.isEmpty()) continue
+            if (constraints.isEmpty()) continue
             val simplified = constraints.filterNot {
                 it is BooleanValueTerm && it.value
             }
-            if(simplified.size == constraints.size) continue
-            val predicate = bind.predicate.copy(constraint=simplified)
+            if (simplified.size == constraints.size) continue
+            val predicate = bind.predicate.copy(constraint = simplified)
             binds[key] = bind.copy(predicate = predicate)
         }
     }
@@ -162,7 +212,7 @@ class DummyVisitor(val constraints: ElementConstraint) : IrElementVisitorVoid {
         val boolPredicate = Constant("Prop", Type.Function(1, listOf(Type.IndexedType(0), Type.NamedType("bool"))))
         val constants = listOf(boolPredicate)
 
-        return with(context){
+        return with(context) {
             Query(qualifiers, constants, binds.values.sortedBy { it.id }, constraints, wfConstraints)
         }
     }

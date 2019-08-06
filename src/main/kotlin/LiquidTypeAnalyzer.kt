@@ -1,4 +1,4 @@
-import analysis.DummyVisitor
+import analysis.FunctionAnalyzer
 import annotation.AnnotationInfo
 import annotation.AnnotationProcessorWithPsiModification
 import annotation.ElementConstraint
@@ -14,7 +14,6 @@ import org.jetbrains.kotlin.config.*
 import org.jetbrains.kotlin.idea.caches.resolve.KotlinCacheServiceImpl
 import org.jetbrains.kotlin.idea.internal.KotlinBytecodeToolWindow
 import org.jetbrains.kotlin.idea.project.languageVersionSettings
-import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.builders.declarations.buildClass
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
@@ -123,11 +122,8 @@ object LiquidTypeAnalyzer {
         println("$constraints")
 
 
-        val dummy = DummyVisitor(constraints)
-        ir.accept(dummy, null)
+        val dummy = FunctionAnalyzer(constraints).analyze(ir)
 
-
-//        DummyVisitor().visit(irModuleFragment)
 
         return
 

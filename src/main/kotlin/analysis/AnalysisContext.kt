@@ -3,10 +3,7 @@ package analysis
 import fixpoint.*
 import fixpoint.predicate.*
 import org.jetbrains.kotlin.ir.IrElement
-import org.jetbrains.kotlin.ir.types.IrType
-import org.jetbrains.kotlin.ir.types.isBoolean
-import org.jetbrains.kotlin.ir.types.isString
-import org.jetbrains.kotlin.ir.types.toKotlinType
+import org.jetbrains.kotlin.ir.types.*
 
 class AnalysisContext {
 
@@ -26,6 +23,12 @@ class AnalysisContext {
     fun createVariable(name: String, type: IrType? = null) = when{
         type != null && type.isBoolean() -> PredicateTerm("Prop", VariableTerm(name))
         else -> VariableTerm(name)
+    }
+
+    fun createEnvironmentForBinds(binds: List<Bind>, except: List<Bind> = emptyList()): Environment {
+        val badIds = except.map { it.id }.toSet()
+        val envIds = binds.map { it.id }.filterNot { it in badIds }.sortedBy { it }
+        return Environment(envIds)
     }
 
     fun createEquality(lhs: Term, rhs: Term) = when{
@@ -49,6 +52,7 @@ class AnalysisContext {
     private fun IrType.toFixpointType() = when {
         isBoolean() -> Type.NamedType("bool")
         isString() ->  Type.NamedType("Str")
+        isInt() -> Type.NamedType("int")
         else -> Type.NamedType("${toKotlinType()}")
     }
 
