@@ -75,10 +75,9 @@ class FunctionAnalyzer(val constraints: ElementConstraint) {
             context[parameter] = bind
         }
         val paramsToConstraints = parameters.zip(parameterConstraints).toMap()
-        val dependencyCollector = TermDependencyCollector(context)
         val dependencies = parameterConstraints.flatten()
-                .map { dependencyCollector.collect(it) }
-                .fold(TermDependencyCollector.TermDependency.EMPTY) { deps, current -> deps.merge(current) }
+                .map { it.dependsOn(context) }
+                .merge()
         return ParameterConstraints(paramsToConstraints, dependencies)
     }
 

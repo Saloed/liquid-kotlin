@@ -29,3 +29,11 @@ fun Term.collectVariables(): List<VariableTerm> {
     transform(collector)
     return collector.variables.toList()
 }
+
+fun Term.dependsOn(context: AnalysisContext): TermDependencyCollector.TermDependency {
+    val collector = TermDependencyCollector(context)
+    return collector.collect(this)
+}
+
+fun List<TermDependencyCollector.TermDependency>.merge() = fold(TermDependencyCollector.TermDependency.EMPTY) { deps, current -> deps.merge(current) }
+
