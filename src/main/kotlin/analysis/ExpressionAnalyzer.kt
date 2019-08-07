@@ -2,11 +2,13 @@ package analysis
 
 import fixpoint.predicate.*
 import mapSecond
+import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.descriptors.ValueParameterDescriptor
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.descriptors.IrBuiltinOperatorDescriptor
 import org.jetbrains.kotlin.ir.expressions.*
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitor
+import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.resolve.constants.BooleanValue
 import org.jetbrains.kotlin.resolve.constants.IntValue
 import pairNotNull
@@ -33,7 +35,7 @@ class ExpressionAnalyzer(val context: AnalysisContext) : IrElementVisitor<Term, 
     }
 
     override fun visitGetValue(expression: IrGetValue, data: Nothing?): Term {
-        val bind = context.binds[expression.symbol.owner]
+        val bind = context[expression.symbol.owner]
                 ?: throw IllegalArgumentException("Unknown declaration: $expression")
         return context.createVariable(bind.name, expression.type)
     }
@@ -77,7 +79,7 @@ class ExpressionAnalyzer(val context: AnalysisContext) : IrElementVisitor<Term, 
     }
 
     private fun callArgumentValues(expression: IrCall): Map<ValueParameterDescriptor, Term> {
-        val parameters = expression.descriptor.valueParameters
+        val parameters = expression.descriptor.valueParameters.map { it.original }
         val arguments = parameters.zipMap { expression.getValueArgument(it) }
         val notNullArguments = arguments.pairNotNull()
         if (notNullArguments.size != parameters.size) {
@@ -87,21 +89,47 @@ class ExpressionAnalyzer(val context: AnalysisContext) : IrElementVisitor<Term, 
         return argumentValues.toMap()
     }
 
+    private fun Name.asUsableString() = asString().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("") { "$it" }
+
+    private fun createUnknownFunctionConstraint(expression: IrCall, resultName: String): Term {
+        context[expression] = context.createBind(resultName, expression.type, emptyList())
+        return context.createVariable(resultName, expression.type)
+
+    }
+
     override fun visitCall(expression: IrCall, data: Nothing?): Term {
-        val descriptor = expression.descriptor
+        val descriptor = expression.descriptor.original
         val arguments = callArgumentValues(expression)
+        val resultName = "call_${descriptor.name.asUsableString()}_${context.generateUniqueName()}"
+
         if (descriptor is IrBuiltinOperatorDescriptor) {
             val result = getBuiltinFunctionResult(arguments, descriptor)
-            val resultName = context.generateUniqueName()
             val resultVar = context.createVariable(resultName, expression.type)
             val resultTerm = context.createEquality(resultVar, result)
-            context.binds[expression] = context.createBind(resultName, expression.type, resultTerm)
+            context[expression] = context.createBind(resultName, expression.type, resultTerm)
             return resultVar
         }
-        //todo: function constraint
-        val resultName = context.generateUniqueName()
-        context.binds[expression] = context.createBind(resultName, expression.type, emptyList())
+
+        if (KotlinBuiltIns.isBuiltIn(descriptor)) {
+            // todo: analyze builtins
+            return createUnknownFunctionConstraint(expression, resultName)
+        }
+
+        val knownConstraint = context.functionConstraints[descriptor]
+//                ?: throw IllegalStateException("Call function ${descriptor.name.asString()} before analyse")
+
+        if(knownConstraint == null){
+            println("Call function ${descriptor.name.asString()} before analyse")
+            return createUnknownFunctionConstraint(expression, resultName)
+        }
+
+        knownConstraint.parameterConstraints.resolveInContext(context, arguments)
+
+        val resultVar = context.createVariable(resultName, expression.type)
+        val constraints = knownConstraint.substitute(arguments, resultVar)
+        context[expression] = context.createBind(resultName, expression.type, constraints)
         return context.createVariable(resultName, expression.type)
+
     }
 
     override fun visitWhen(expression: IrWhen, data: Nothing?): Term {
@@ -133,7 +161,7 @@ class ExpressionAnalyzer(val context: AnalysisContext) : IrElementVisitor<Term, 
         val resultAssign = AssigmentTerm(itTerm, resultVar)
         val substitution = SubstitutionTerm(resultName, listOf(resultAssign))
         val resultBind = context.createBind(resultVarName, expression.type, substitution)
-        context.binds[expression] = resultBind
+        context[expression] = resultBind
 
 
         fun createBranch(condition: List<Term>, value: Term, condExpr: IrExpression?, valueExpr: IrExpression) {
@@ -189,7 +217,7 @@ class ExpressionAnalyzer(val context: AnalysisContext) : IrElementVisitor<Term, 
         val returnValueTerm = expression.value.accept(this, null)
         val returnTerm = context.createVariable("return_value", expression.value.type)
         val equality = context.createEquality(returnTerm, returnValueTerm)
-        context.binds[expression] = context.createBind("return_value", expression.value.type, equality)
+        context[expression] = context.createBind("return_value", expression.value.type, equality)
         return returnValueTerm
     }
 
