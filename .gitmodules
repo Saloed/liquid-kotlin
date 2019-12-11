@@ -2,3 +2,6 @@
 	path = kex
 	url = git@github.com:Saloed/kex.git
   branch = liquid-kotlin
+[submodule "kfg"]
+	path = kfg
+	url = git@github.com:Saloed/kfg.git

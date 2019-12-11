@@ -3,12 +3,11 @@ import com.intellij.psi.PsiArrayType
 import com.intellij.psi.PsiPrimitiveType
 import com.intellij.psi.PsiTypeParameter
 import com.intellij.psi.impl.source.PsiClassReferenceType
+import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.research.kex.ktype.kexType
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.StateBuilder
-import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kex.state.transformer.Transformer
-import org.jetbrains.research.kex.util.castTo
 import org.jetbrains.research.kfg.ClassManager
 import org.jetbrains.research.kfg.ir.Class
 import org.jetbrains.research.kfg.ir.value.*
@@ -36,7 +35,7 @@ fun Type.typeDefaultValue() = when (this) {
 }
 
 
-fun JvmPrimitiveType.toKfgType(): Type = when (castTo<PsiPrimitiveType>().kind) {
+fun JvmPrimitiveType.toKfgType(): Type = when (cast<PsiPrimitiveType>().kind) {
     JvmPrimitiveTypeKind.BOOLEAN -> BoolType
     JvmPrimitiveTypeKind.BYTE -> ByteType
     JvmPrimitiveTypeKind.CHAR -> CharType
@@ -51,8 +50,8 @@ fun JvmPrimitiveType.toKfgType(): Type = when (castTo<PsiPrimitiveType>().kind) 
 
 fun JvmType.toKfgType(cm: ClassManager): Type = when (this) {
     is JvmPrimitiveType -> toKfgType()
-    is JvmArrayType -> ArrayType(this.castTo<PsiArrayType>().componentType.toKfgType(cm))
-    is JvmReferenceType -> castTo<PsiClassReferenceType>().resolve()?.let {
+    is JvmArrayType -> ArrayType(this.cast<PsiArrayType>().componentType.toKfgType(cm))
+    is JvmReferenceType -> cast<PsiClassReferenceType>().resolve()?.let {
         if (it is PsiTypeParameter) {
             val bounds = it.bounds
             if (bounds.isEmpty()) cm.type.getRefType("java/lang/Object")

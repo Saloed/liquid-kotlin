@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.utils.addToStdlib.safeAs
+import org.jetbrains.research.kex.ktype.KexType
 import org.jetbrains.research.kex.ktype.KexVoid
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.predicate.*
@@ -15,8 +16,8 @@ object SimplifyPredicates : Transformer<SimplifyPredicates> {
         val tlhv = this.transform(predicate.lhv)
         val trhv = this.transform(predicate.rhv)
         return when {
-            tlhv == tf.getTrue() && trhv == tf.getTrue() -> Transformer.Stub
-            tlhv == tf.getFalse() && trhv == tf.getFalse() -> Transformer.Stub
+            tlhv == tf.getTrue() && trhv == tf.getTrue() ->  nothing()
+            tlhv == tf.getFalse() && trhv == tf.getFalse() -> nothing()
             else -> predicate
         }
     }
@@ -73,8 +74,10 @@ class RenameVariables(val variablePrefix: Map<String, Int>) : Transformer<Rename
 
 object RemoveVoid : Transformer<RemoveVoid> {
 
-    object StubTerm : Term("StubTerm", KexVoid, emptyList()) {
-        override fun print() = "StubTerm"
+    object StubTerm : Term() {
+        override val subterms = emptyList<Term>()
+        override val type = KexVoid()
+        override val name = "StubTerm"
         override fun <T : Transformer<T>> accept(t: Transformer<T>) = StubTerm
     }
 
@@ -92,7 +95,7 @@ object RemoveVoid : Transformer<RemoveVoid> {
 
     override fun transformPredicate(predicate: Predicate): Predicate {
         val operands = predicate.operands.map { it.accept(this) }
-        if (operands.any { it is StubTerm }) return Transformer.Stub
+        if (operands.any { it is StubTerm }) return nothing()
         return predicate
     }
 }
@@ -128,7 +131,7 @@ object OptimizeEqualityChains : Transformer<OptimizeEqualityChains> {
                 .map { it to findUsages(it, ps) }
                 .filter { (_, predicates) -> predicates.size == 2 }
                 .filter { (_, predicates) -> predicates.all {
-                    it is EqualityPredicate|| it is InequalityPredicate || it is ImplicationPredicate
+                    it is EqualityPredicate|| it is InequalityPredicate
                 } }
                 .filter { (term, predicates) ->
                     predicates.any {

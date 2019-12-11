@@ -19,8 +19,8 @@ open class FolderProjectTest : LightCodeInsightFixtureTestCase() {
         baseDirectoryPsi = myFixture.psiManager.findDirectory(directory)!!
     }
 
-//    fun testSimple() = LiquidTypeAnalyzer.analyze(project)
+    fun testSimple() = LiquidTypeAnalyzer.analyze(project)
 
-    fun testSimpleWithIr() = AnalyzeIr.analyze(project)
+//    fun testSimpleWithIr() = AnalyzeIr.analyze(project)
 
 }

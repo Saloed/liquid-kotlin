@@ -1,3 +1,4 @@
+import ClassInfo.typeInfo
 import com.intellij.psi.tree.IElementType
 import org.jetbrains.kotlin.KtNodeTypes
 import org.jetbrains.kotlin.js.descriptorUtils.getJetTypeFqName
@@ -11,18 +12,17 @@ import org.jetbrains.kotlin.types.typeUtil.isChar
 import org.jetbrains.kotlin.types.typeUtil.isInt
 import org.jetbrains.kotlin.types.typeUtil.isTypeParameter
 import org.jetbrains.research.kex.ktype.*
+import org.jetbrains.research.kex.state.BasicState
+import org.jetbrains.research.kex.state.ChoiceState
+import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
-import org.jetbrains.research.kex.state.term.IfTerm
+import org.jetbrains.research.kex.state.predicate.PredicateType
 import org.jetbrains.research.kex.state.term.Term
 import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kfg.ir.value.instruction.BinaryOpcode
 import org.jetbrains.research.kfg.ir.value.instruction.CmpOpcode
 import org.jetbrains.research.kfg.ir.value.instruction.UnaryOpcode
-import ClassInfo.typeInfo
-import org.jetbrains.research.kex.state.BasicState
-import org.jetbrains.research.kex.state.ChoiceState
-import org.jetbrains.research.kex.state.PredicateState
-import org.jetbrains.research.kex.state.predicate.PredicateType
+import java.util.*
 
 object TokenMapping {
     val cmpTokenMap = hashMapOf(
@@ -102,10 +102,11 @@ fun isArrayType(type: KotlinType): Boolean {
 }
 
 fun getArrayType(type: KotlinType): KexArray {
-    val name = type.nameIfStandardType?.identifier ?: throw IllegalStateException("Name must be not null")
+    val name = type.nameIfStandardType?.identifier
+            ?: throw IllegalStateException("Name must be not null")
     return when (name) {
-        "IntArray" -> KexArray(KexInt)
-        "CharArray" -> KexArray(KexChar)
+        "IntArray" -> KexArray(KexInt())
+        "CharArray" -> KexArray(KexChar())
         else -> throw IllegalArgumentException("Unknown Array type")
     }
 }
@@ -134,9 +135,9 @@ fun getSimpleType(type: SimpleType) = when {
 fun KexType.makeReference() = KexReference(this)
 
 fun KotlinType.toKexType(): KexType = when {
-    isBoolean() -> KexBool
-    isInt() -> KexInt
-    isChar() -> KexChar
+    isBoolean() -> KexBool()
+    isInt() -> KexInt()
+    isChar() -> KexChar()
 //    isArrayType(this) -> getArrayType(this)
     this is SimpleType -> getSimpleType(this)
     this is DeferredType -> unwrap().toKexType()
@@ -159,13 +160,8 @@ fun PredicateFactory.getIf(cond: Term, thenExpr: Term, elseExpr: Term, result: T
     return ChoiceState(listOf(trueState, falseState))
 }
 
-fun TermFactory.getIf(cond: Term, thenExpr: Term, elseExpr: Term): Term {
-    if (cond.type !is KexBool) throw IllegalArgumentException("If condition must be KexBool but $cond")
-    if (thenExpr.type != elseExpr.type) throw IllegalArgumentException("If branches must type equal but ($thenExpr) and ($elseExpr)")
-    return IfTerm(thenExpr.type, cond, thenExpr, elseExpr)
-}
 
-fun UnaryOpcode.Companion.fromOperationToken(token: IElementType) = when (token) {
+fun unaryOpcodeFromOperationToken(token: IElementType) = when (token) {
     KtTokens.MINUS -> UnaryOpcode.NEG
     else -> throw IllegalArgumentException("Not unary operation: $token")
 }
@@ -186,9 +182,19 @@ fun List<Term>.combineWith(combiner: (Term, Term) -> Term) = when (size) {
 }
 
 fun List<Term>.combineWithAnd() = combineWith { lhs, rhs ->
-    TermFactory.getBinary(KexBool, BinaryOpcode.And(), lhs, rhs)
+    TermFactory.getBinary(KexBool(), BinaryOpcode.And(), lhs, rhs)
 }
 
 fun List<Term>.combineWithOr() = combineWith { lhs, rhs ->
-    TermFactory.getBinary(KexBool, BinaryOpcode.Or(), lhs, rhs)
+    TermFactory.getBinary(KexBool(), BinaryOpcode.Or(), lhs, rhs)
 }
+
+object TermDebug {
+    val termInfo = IdentityHashMap<Term, String>()
+}
+
+var Term.debugInfo: String
+    get() = TermDebug.termInfo[this] ?: ""
+    set(value) {
+        TermDebug.termInfo[this] = value
+    }

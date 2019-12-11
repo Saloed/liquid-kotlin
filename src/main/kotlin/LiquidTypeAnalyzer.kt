@@ -23,8 +23,8 @@ import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.utils.addToStdlib.cast
 import org.jetbrains.kotlin.utils.addToStdlib.safeAs
 import org.jetbrains.research.kex.config.FileConfig
-import org.jetbrains.research.kex.config.GlobalConfig
 import org.jetbrains.research.kex.config.RuntimeConfig
+import org.jetbrains.research.kex.config.kexConfig
 import org.jetbrains.research.kex.smt.SMTProxySolver
 import org.jetbrains.research.kex.state.PredicateState
 import org.jetbrains.research.kex.state.predicate.PredicateFactory
@@ -81,9 +81,10 @@ object LiquidTypeAnalyzer {
 
         for (file in allKtFilesPsi) {
 //            if (!file.name.endsWith("xxx.kt")) continue
-            if (!file.name.endsWith("testJava.kt")) continue
+//            if (!file.name.endsWith("testJava.kt")) continue
 //            if (!file.name.endsWith("Test1.kt")) continue
 //            if (!file.name.endsWith("Mian.kt")) continue
+            if (!file.name.endsWith("showcase.kt")) continue
 
             val lqtAnnotations = processor.processLqtAnnotations(file)
 
@@ -157,9 +158,8 @@ object LiquidTypeAnalyzer {
             }
 
     private fun initializeSolver(): SMTProxySolver {
-        val config = GlobalConfig
-        config.initialize(RuntimeConfig, FileConfig("kex/kex.ini"))
-        return SMTProxySolver(ClassManager().type)
+        kexConfig.initialize(RuntimeConfig, FileConfig("kex/kex.ini"))
+        return SMTProxySolver(ClassManager(emptyMap()).type)
     }
 
 
@@ -204,11 +204,11 @@ object LiquidTypeAnalyzer {
     private fun preparePredicateState(ps: PredicateState) = listOf(
             RemoveVoid,
             JavaTypeConverter.JavaTypeTransformer,
-            BoolTypeAdapter(ClassManager().type),
+            BoolTypeAdapter(ClassManager(emptyMap()).type),
             SimplifyPredicates,
             OptimizeEqualityChains,
                 ConstantPropagator,
-            Optimizer
+            Optimizer()
     ).apply(ps).simplify()
 
     private fun preparePredicateState(psPair: Pair<PredicateState, PredicateState>) =
@@ -227,6 +227,10 @@ object LiquidTypeAnalyzer {
 
 //        viewLiquidTypes("XXX", NewLQTInfo.typeInfo.values)
 
+        TermDebug.termInfo.forEach { (term, info) ->
+            println("$term  ->  $info")
+
+        }
 
         for ((expr, safeProperty) in safeProperties) {
             val (lhs, rhs) = preparePredicateState(safeProperty)

@@ -7,6 +7,8 @@ import org.jetbrains.research.kex.ktype.KexType
 import org.jetbrains.research.kex.state.term.*
 import org.jetbrains.research.kex.state.transformer.Transformer
 
+val tf = TermFactory
+
 object JavaTypeConverter {
     val toKotlinTypesMap: Map<String, String> = mapOf(
             CommonClassNames.JAVA_LANG_OBJECT to KotlinBuiltIns.FQ_NAMES.any.asString(),
@@ -146,8 +148,6 @@ object JavaTypeConverter {
                 ?: term
 
         override fun transformUndefTerm(term: UndefTerm): Term = ktTypeIfPossible(term)?.let { tf.getUndef(it) } ?: term
-        override fun transformIfTerm(term: IfTerm): Term = ktTypeIfPossible(term)?.let { tf.getIf(term.cond, term.thenTerm, term.elseTerm) }
-                ?: term
     }
 
 

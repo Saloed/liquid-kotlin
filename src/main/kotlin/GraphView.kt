@@ -53,7 +53,7 @@ fun basicPsToGraphView(name: String, ps: BasicState) {
     }
 
     val uniqueTerms = termsWithDependencies.flatMap { it.value + listOf(it.key) }.toSet()
-    val termNodes = uniqueTerms.zipMap { GraphView("Term_${it.hashCode()}", "${it::class.simpleName}:  ${it.name} | ${it.print()}") }.toMap()
+    val termNodes = uniqueTerms.zipMap { GraphView("Term_${it.hashCode()}", "${it::class.simpleName}:  ${it.name} | ${it.name}") }.toMap()
     for ((term, deps) in termsWithDependencies) {
         val node = termNodes[term]!!
         node.successors.addAll(deps.mapNotNull { termNodes[it] }.filterNot { it in node.successors })

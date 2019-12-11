@@ -16,16 +16,15 @@ import org.jetbrains.research.kex.state.term.Term
 import org.jetbrains.research.kex.state.term.TermFactory
 import org.jetbrains.research.kex.state.transformer.BoolTypeAdapter
 import org.jetbrains.research.kex.state.transformer.ConstantPropagator
-import org.jetbrains.research.kex.util.castTo
 import org.jetbrains.research.kfg.ClassManager
-import org.jetbrains.research.kfg.Package
+import org.jetbrains.research.kfg.KfgConfigBuilder
 import org.jetbrains.research.kfg.analysis.LoopSimplifier
 import org.jetbrains.research.kfg.builder.cfg.CfgBuilder
 import org.jetbrains.research.kfg.ir.ConcreteClass
 import org.jetbrains.research.kfg.ir.Method
 import org.jetbrains.research.kfg.ir.value.instruction.UnreachableInst
 import org.jetbrains.research.kfg.util.Flags
-import org.jetbrains.research.kfg.util.JarUtils
+import org.jetbrains.research.kfg.util.*
 import org.jetbrains.research.kfg.util.isClass
 import java.util.jar.JarFile
 
@@ -41,11 +40,11 @@ object ClassFileElementResolver {
                 .toSet()
                 .map { JarFile(it) }
                 .flatMap {
-                    JarUtils.parseJarClasses(it, Flags.readAll)
+                    parseJarClasses(it, Flags.readAll)
                 }
                 .toMap()
-
-        val cm = ClassManager(jarClasses, Package("*"))
+        val config = KfgConfigBuilder().failOnError(false).ignoreIncorrectClasses(true).build()
+        val cm = ClassManager(jarClasses, config)
 
         val result = hashMapOf<PsiElement, LiquidType>()
 
@@ -53,7 +52,7 @@ object ClassFileElementResolver {
             if (element in result) continue
             if(element is PsiClass){
                 val className = element.qualifiedName?.replace('.', '/') ?: continue
-                val concreteClass = cm.getByNameOrNull(className) ?: continue
+                val concreteClass = cm.getByName(className)
                 val lqt = LiquidType.createWithoutExpression(element, className, concreteClass.kexType(cm))
                 result[element] = lqt
                 continue
@@ -61,10 +60,10 @@ object ClassFileElementResolver {
             if (element !is PsiMethod) continue
             val elementClass = element.containingClass ?: continue
             val className = elementClass.qualifiedName?.replace('.', '/') ?: continue
-            val concreteClass = cm.getByNameOrNull(className) ?: continue
+            val concreteClass = cm.getByName(className)
 
-            val paramTypes = element.parameters.map { it.castTo<PsiParameter>().type.toKfgType(cm) }
-            val methodCandidates = concreteClass.methods.values.filter {
+            val paramTypes = element.parameters.map { it.cast<PsiParameter>().type.toKfgType(cm) }
+            val methodCandidates = concreteClass.methods.filter {
                 (element.isConstructor && it.name == "<init>") || it.name == element.name
             }.filter {
                 it.argTypes.toList() == paramTypes
@@ -122,7 +121,7 @@ object ClassFileElementResolver {
             }
             val argument = TermFactory.getThis(newObject.type)
             val mappings = arguments.mapping + (argument to newObject.variable)
-            val fields = method.`class`.fields.values.filter { it.defaultValue != null || it.type.isPrimary }
+            val fields = method.`class`.fields.filter { it.defaultValue != null || it.type.isPrimary }
             val initializers = fields.map {
                 val fieldName = TermFactory.getString(it.name)
                 val fieldTerm = TermFactory.getField(it.type.kexType.makeReference(), newObject.variable, fieldName)
@@ -145,7 +144,7 @@ object ClassFileElementResolver {
             val mappings = arguments.mapping + listOfNotNull(returnLqt?.let { returnTerm!! to it.variable })
 
             val ps = TermRemapper("kexCall.${method.name}.${UIDGenerator.id}", mappings).apply(predicateState)
-            val returnType = returnLqt?.type ?: KexVoid
+            val returnType = returnLqt?.type ?: KexVoid()
             return PsiMethodCallInfo(returnType, arguments.arguments, null, returnLqt, ps.simplify())
         }
 
@@ -164,7 +163,7 @@ object ClassFileElementResolver {
                     listOfNotNull(returnLqt?.let { returnTerm!! to it.variable })
 
             val ps = TermRemapper("kexCall.${method.name}.${UIDGenerator.id}", mappings).apply(predicateState)
-            val returnType = returnLqt?.type ?: KexVoid
+            val returnType = returnLqt?.type ?: KexVoid()
             return PsiMethodCallInfo(returnType, arguments.arguments, thisLqt, returnLqt, ps.simplify())
         }
 
@@ -185,7 +184,7 @@ object ClassFileElementResolver {
 
             val predicateState = transformers.apply(methodPredicateState)
 
-            val parameterNames = expression.parameters.map { it.castTo<PsiParameter>().name!! }
+            val parameterNames = expression.parameters.map { it.cast<PsiParameter>().name!! }
             val arguments = method.argTypes.zip(parameterNames).mapIndexed { idx, (type, name) ->
                 buildArgument(expression, idx, type.kexType, name)
             }.let { Arguments.fromList(it) }
@@ -214,7 +213,7 @@ object ClassFileElementResolver {
                 addPredicate(ps)
 
                 val values = ValueTermCollector.invoke(methodInfo.predicateState).toList()
-                val variableHolder = LiquidType(expression, KexBool, values.combineWithAnd(), mutableListOf()).apply {
+                val variableHolder = LiquidType(expression, KexBool(), values.combineWithAnd(), mutableListOf()).apply {
                     addEmptyPredicate()
                 }
                 dependsOn.add(variableHolder)
@@ -235,15 +234,15 @@ object ClassFileElementResolver {
     }
 
     private fun buildMethods(cm: ClassManager, concreteClass: ConcreteClass) = concreteClass.methods
-            .filterNot { it.value.isAbstract }
-            .filterNot { it.value.isNative }
-            .map { CfgBuilder(cm, it.value).build() }
+            .filterNot { it.isAbstract }
+            .filterNot { it.isNative }
+            .map { CfgBuilder(cm, it).build() }
             .map { it.name to it }
             .toMap()
 
 }
 
-fun JarUtils.parseJarClasses(jar: JarFile, flags: Flags) = jar.entries().asSequence()
+fun parseJarClasses(jar: JarFile, flags: Flags) = jar.entries().asSequence()
         .filter { it.isClass }
         .map { readClassNode(jar.getInputStream(it), flags) }
         .map { it.name to it }

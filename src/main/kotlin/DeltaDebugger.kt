@@ -1,6 +1,7 @@
 import org.jetbrains.research.kex.config.FileConfig
 import org.jetbrains.research.kex.config.GlobalConfig
 import org.jetbrains.research.kex.config.RuntimeConfig
+import org.jetbrains.research.kex.config.kexConfig
 import org.jetbrains.research.kex.smt.Result
 import org.jetbrains.research.kex.smt.SMTProxySolver
 import org.jetbrains.research.kex.state.PredicateState
@@ -12,9 +13,8 @@ object DeltaDebugger {
     val random = Random(17)
 
     fun debug(ps: PredicateState, query: PredicateState): PredicateState {
-        val config = GlobalConfig
-        config.initialize(RuntimeConfig, FileConfig("kex/kex.ini"))
-        val solver = SMTProxySolver(ClassManager().type)
+        kexConfig.initialize(RuntimeConfig, FileConfig("kex/kex.ini"))
+        val solver = SMTProxySolver(ClassManager(emptyMap()).type)
 
         var result = ps
         for (i in 0..1000) {

@@ -610,7 +610,7 @@ class UnaryExpressionAnalyzer(expression: KtUnaryExpression) : ExpressionAnalyze
         val exprLqt = subExprAnalyzer(expr).analyze()
 
         val operation = expression.operationToken
-        val opcode = UnaryOpcode.fromOperationToken(operation)
+        val opcode = unaryOpcodeFromOperationToken(operation)
         val value = TermFactory.getUnaryTerm(exprLqt.variable, opcode)
 
         val constraint = PredicateFactory.getEquality(typeInfo.variable, value)
@@ -765,7 +765,7 @@ class ReturnAnalyzer(expression: KtReturnExpression) : ExpressionAnalyzer<KtRetu
         val value = if (expr != null) {
             subExprAnalyzer(expr).analyze()
         } else {
-            LiquidType.createWithoutExpression(expression, "Unit", KexVoid).apply {
+            LiquidType.createWithoutExpression(expression, "Unit", KexVoid()).apply {
                 addEmptyPredicate()
             }
         }
